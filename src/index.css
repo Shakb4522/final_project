@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .glass-card {
+    @apply bg-slate-900/60 backdrop-blur-xl border border-white/5 shadow-[0_4px_30px_rgba(0,0,0,0.1)] rounded-2xl;
+  }
+  
+  .btn-gradient {
+    @apply bg-gradient-to-br from-red-600 to-red-800 text-white shadow-[0_4px_15px_rgba(220,38,38,0.3)] transition-all duration-300;
+  }
+  
+  .btn-gradient:hover:not(:disabled) {
+    @apply -translate-y-[2px] shadow-[0_8px_25px_rgba(220,38,38,0.4)] brightness-110;
+  }
+
+  .btn-gradient:disabled {
+    @apply opacity-50 cursor-not-allowed transform-none shadow-none;
+  }
+}
+
+body {
+  background-color: #0a0e17;
+  background-image: 
+    radial-gradient(circle at 15% 50%, rgba(220, 38, 38, 0.05), transparent 25%),
+    radial-gradient(circle at 85% 30%, rgba(255, 255, 255, 0.02), transparent 25%);
+  color: #f8fafc;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Toggles */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: rgba(255, 255, 255, 0.1);
+  transition: .3s;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 18px; width: 18px;
+  left: 2px; bottom: 2px;
+  background-color: white;
+  transition: .3s;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+input:checked + .slider { background: linear-gradient(135deg, #dc2626, #991b1b); border-color: transparent; }
+input:checked + .slider:before { transform: translateX(20px); }
+
+/* Viewer */
+.mask-polygon {
+  fill: var(--base-color);
+  pointer-events: auto;
+  transition: fill 0.2s;
+  cursor: pointer;
+}
+.mask-polygon:hover {
+  fill: var(--hover-color);
+}
+.label-text {
+  fill: #ffffff;
+  font-family: 'Inter', sans-serif;
+  font-size: 6px;
+  font-weight: 600;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+.loader-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(255,255,255,0.1);
+  border-radius: 50%;
+  border-top-color: #dc2626;
+  animation: spin 1s ease-in-out infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
