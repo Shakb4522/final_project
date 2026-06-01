@@ -12,6 +12,10 @@ import shutil
 import tempfile
 from pathlib import Path
 from dotenv import load_dotenv
+from PIL import Image
+import cv2
+import numpy as np
+from huggingface_hub import hf_hub_download
 
 load_dotenv()
 
@@ -37,33 +41,90 @@ MONGODB_URI = os.getenv(
 mongo_client = AsyncIOMotorClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
 db = mongo_client.inspection_hub
 
-# ─── YOLOv8 Local Model ────────────────────────────────────────────────────────
-MODEL_PATH = Path(__file__).parent / "4_classe.pt"
-_yolo_model = None
+# ─── YOLOv8 Local & Hub Models ──────────────────────────────────────────────────
+_visual_model = None
+_radio_model = None
 
-CLASS_NAMES = {0: "crack", 1: "volumetric", 2: "union", 3: "surface"}
-MODEL_VERSION = "WeldSight-4CLS (P:78.8% R:67.8% mAP50:72.3%)"
-
-def get_yolo():
-    global _yolo_model
-    if _yolo_model is None:
+def get_visual_model():
+    global _visual_model
+    if _visual_model is None:
         try:
             from ultralytics import YOLO
-            _yolo_model = YOLO(str(MODEL_PATH))
-            print(f"[WeldSight] ✅ Loaded model: {MODEL_PATH}")
+            # Visual inspection model (color photographs of welds)
+            model_path = hf_hub_download(
+                repo_id="chakib2f2sdf/my-yolo-detector",
+                filename="best.pt"
+            )
+            _visual_model = YOLO(model_path)
+            print(f"[WeldSight] [OK] Loaded Visual YOLOv8 Model: {model_path}")
         except Exception as e:
-            print(f"[WeldSight] ❌ Failed to load model: {e}")
-    return _yolo_model
+            print(f"[WeldSight] [FAIL] Failed to load Visual YOLOv8 Model: {e}")
+    return _visual_model
+
+def get_radio_model():
+    global _radio_model
+    if _radio_model is None:
+        try:
+            from ultralytics import YOLO
+            # Radiographic inspection model (X-ray / RT images of welds)
+            model_path = hf_hub_download(
+                repo_id="chakib2f2sdf/Radio_model",
+                filename="best.pt"
+            )
+            _radio_model = YOLO(model_path)
+            print(f"[WeldSight] [OK] Loaded Radiographic YOLOv8 Model: {model_path}")
+        except Exception as e:
+            print(f"[WeldSight] [FAIL] Failed to load Radiographic YOLOv8 Model: {e}")
+    return _radio_model
+
+
+def classify_image_type(pil_image: Image.Image) -> str:
+    """
+    Determines whether an image is a radiographic (X-ray) or visual (photo).
+    Radiographic images are nearly always grayscale with very low color saturation.
+    """
+    img = pil_image.convert("RGB")
+    arr = np.array(img, dtype=np.float32)
+
+    # ---- Check 1: Color saturation ----
+    pixel_chroma = arr.max(axis=2) - arr.min(axis=2)          # shape (H, W)
+    mean_chroma = pixel_chroma.mean()
+
+    # ---- Check 2: Fraction of near-gray pixels ----
+    gray_fraction = (pixel_chroma < 15).mean()
+
+    # Decision: if >92% of pixels are gray AND mean chroma is low → radiograph
+    if gray_fraction > 0.92 and mean_chroma < 20:
+        return "radio"
+    return "visual"
+
+
+def preprocess_radio_image(pil_image: Image.Image) -> Image.Image:
+    """
+    Applies CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    and denoising to enhance X-ray features.
+    """
+    # Convert to OpenCV format (grayscale for radiography)
+    img_array = np.array(pil_image.convert("L"))
+    
+    # 1. Denoising (Non-local Means Denoising)
+    denoised = cv2.fastNlMeansDenoising(img_array, None, h=10, templateWindowSize=7, searchWindowSize=21)
+    
+    # 2. CLAHE (Contrast Enhancement)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(denoised)
+    
+    # Convert back to PIL RGB (YOLO expects 3 channels)
+    result = Image.fromarray(enhanced).convert("RGB")
+    return result
 
 
 @app.on_event("startup")
 async def startup():
-    # Pre-load model
-    get_yolo()
     # Seed default MongoDB users
     try:
         await mongo_client.admin.command("ping")
-        print("[WeldSight] ✅ MongoDB connected")
+        print("[WeldSight] [OK] MongoDB connected")
         for u, pw, role in [
             ("admin", "admin123", "Lead Inspector"),
             ("chakib", "chakib123", "Inspector"),
@@ -73,7 +134,7 @@ async def startup():
                 await db.registered_users.insert_one({"username": u, "password": pw, "role": role})
                 print(f"[WeldSight] Seeded user: {u}")
     except Exception as e:
-        print(f"[WeldSight] ⚠️ MongoDB error: {e}")
+        print(f"[WeldSight] [WARN] MongoDB error: {e}")
 
 
 # ─── Pydantic Models ───────────────────────────────────────────────────────────
@@ -133,48 +194,97 @@ async def log_model_usage(request: Request, model_type: str):
     )
 
 
-# ─── 🔥 LOCAL MODEL INFERENCE ─────────────────────────────────────────────────
+# ─── 🔥 DUAL MODEL LOCAL INFERENCE ─────────────────────────────────────────────
 
 @app.post("/api/analyze")
 async def analyze_image(request: Request, file: UploadFile = File(...)):
     """
-    Run local WeldSight 4-Class model inference on an uploaded radiographic image.
-    Returns detections in the same format as the original Gradio Space.
+    Run local dual-model WeldSight prediction on an uploaded weld scan.
+    Chooses visual or radiographic model dynamically (or by manual choice).
     """
-    model = get_yolo()
-    if model is None:
-        raise HTTPException(status_code=503, detail="AI model not available. Check that 4_classe.pt is present.")
+    model_choice = request.headers.get("x-model-choice", "Auto-Detect")
+    
+    # Read the file content as PIL image
+    file_bytes = await file.read()
+    try:
+        pil_image = Image.open(io.BytesIO(file_bytes))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid image file: {e}")
 
-    # Save upload to a temp file
+    # Determine visual vs radiographic
+    if model_choice == "Auto-Detect":
+        detected_type = classify_image_type(pil_image)
+    elif model_choice == "Visual (Photo)":
+        detected_type = "visual"
+    else:
+        detected_type = "radio"
+
+    # Select model
+    if detected_type == "radio":
+        model = get_radio_model()
+        model_label = "Radiographic (X-Ray)"
+        model_key = "radio"
+    else:
+        model = get_visual_model()
+        model_label = "Visual (Photo)"
+        model_key = "yolo"
+
+    if model is None:
+        raise HTTPException(status_code=503, detail=f"{model_label} model is currently not loaded.")
+
+    # Preprocess radiographic images
+    analysis_image = pil_image
+    if detected_type == "radio":
+        analysis_image = preprocess_radio_image(pil_image)
+
+    # Save to temp file for ultralytics YOLOv8 run
     suffix = Path(file.filename).suffix or ".jpg"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
+        analysis_image.save(tmp.name)
         tmp_path = tmp.name
 
     try:
-        results = model(tmp_path, imgsz=1280, conf=0.25, verbose=False)
+        # Run prediction (support segmentation if masks exist in the model)
+        results = model.predict(source=tmp_path, task="segment", conf=0.25, verbose=False)
+        r = results[0]
+        
         detections = []
-
-        for result in results:
-            boxes = result.boxes
-            if boxes is None:
-                continue
-            for box in boxes:
+        
+        # 1. Box detections
+        if r.boxes is not None:
+            for box in r.boxes:
                 cls_id = int(box.cls[0].item())
-                conf   = float(box.conf[0].item())
+                conf = round(float(box.conf[0].item()), 4)
                 x1, y1, x2, y2 = [float(v) for v in box.xyxy[0].tolist()]
-                label  = CLASS_NAMES.get(cls_id, f"class_{cls_id}")
+                label = r.names.get(cls_id, f"class_{cls_id}")
                 detections.append({
-                    "type":       "box",
-                    "label":      label,
+                    "type": "box",
+                    "label": label,
                     "confidence": conf,
-                    "xyxy":       [x1, y1, x2, y2],
+                    "xyxy": [x1, y1, x2, y2]
                 })
 
-        # Log usage
-        await log_model_usage(request, "4cls")
+        # 2. Polygon masks
+        if hasattr(r, "masks") and r.masks is not None:
+            for i in range(len(r.masks)):
+                cls_id = int(r.boxes.cls[i].item())
+                conf = round(float(r.boxes.conf[i].item()), 4)
+                points = r.masks.xy[i].tolist() if len(r.masks.xy) > i else []
+                label = r.names.get(cls_id, f"class_{cls_id}")
+                detections.append({
+                    "type": "mask",
+                    "label": label,
+                    "confidence": conf,
+                    "points": points
+                })
 
-        return {"detections": detections, "model_used": MODEL_VERSION}
+        # Log usage to telemetry
+        await log_model_usage(request, model_key)
+
+        return {
+            "detections": detections,
+            "model_used": f"WeldSight {model_label}"
+        }
 
     finally:
         os.unlink(tmp_path)
@@ -213,11 +323,18 @@ async def register(user: UserRegister):
 async def get_global_stats():
     return [
         {
-            "model_name":  "WeldSight-4CLS-Local",
-            "model_key":   "4cls",
+            "model_name":  "WeldSight-Visual-YOLOv8",
+            "model_key":   "yolo",
+            "status":      "OPERATIONAL",
+            "uptime":      "99.98%",
+            "description": "Local YOLOv8 Visual Defect Detector (crack / volumetric / union / surface) optimized for standard weld photographs.",
+        },
+        {
+            "model_name":  "WeldSight-Radiographic-YOLOv8",
+            "model_key":   "radio",
             "status":      "OPERATIONAL",
             "uptime":      "99.99%",
-            "description": "Local 4-class radiographic defect detector (crack / volumetric / union / surface). P:78.8% R:67.8% mAP50:72.3%",
+            "description": "Local YOLOv8 Radiographic Defect Detector with CLAHE contrast enhancement & fastNlMeans denoising.",
         },
         {
             "model_name":  "Qwen-2.5-72B-Expert",
@@ -267,8 +384,8 @@ async def test_traffic(model_key: str, request: Request):
     servers = {
         "4cls":  {"host": "localhost (WeldSight-4CLS)", "ip": "127.0.0.1", "region": "Local GPU (RTX 4060)"},
         "qwen":  {"host": "router.huggingface.co",     "ip": "3.163.189.74", "region": "US-East (Virginia)"},
-        "yolo":  {"host": "localhost",                  "ip": "127.0.0.1", "region": "Local"},
-        "radio": {"host": "localhost",                  "ip": "127.0.0.1", "region": "Local"},
+        "yolo":  {"host": "localhost (Visual YOLOv8)",  "ip": "127.0.0.1", "region": "Local GPU (RTX 4060)"},
+        "radio": {"host": "localhost (Radiographic YOLOv8)", "ip": "127.0.0.1", "region": "Local GPU (RTX 4060)"},
     }
     s = servers[model_key]
     return {"status": "success", "client_ip": client_ip, "username": username, "server_host": s["host"], "server_ip": s["ip"], "server_region": s["region"], "latency_ms": latency_ms, "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")}

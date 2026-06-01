@@ -6,3 +6,5 @@ pydantic
 ultralytics
 pillow
 python-multipart
+huggingface_hub
+opencv-python-headless

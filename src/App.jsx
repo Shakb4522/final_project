@@ -959,7 +959,10 @@ export default function App() {
 
       const res = await fetch(`${API_URL}/api/analyze`, {
         method: "POST",
-        headers: { "x-user-id": userId || "Anonymous" },
+        headers: { 
+          "x-user-id": userId || "Anonymous",
+          "x-model-choice": analysisModel
+        },
         body: formData,
       });
 
