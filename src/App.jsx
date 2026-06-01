@@ -347,6 +347,18 @@ const API_URL = import.meta.env.VITE_API_URL ||
 export default function App() {
 
 
+  // === Auth & Login State (declared first) ===
+  const [userId, setUserId] = useState(() => localStorage.getItem('user_id') || '');
+  const [userRole, setUserRole] = useState(() => localStorage.getItem('user_role') || '');
+  const [userIp, setUserIp] = useState('Detecting...');
+  const [showLogin, setShowLogin] = useState(!localStorage.getItem('user_id'));
+  const [loginInput, setLoginInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
+
+  // === App State ===
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [selectedTraffic, setSelectedTraffic] = useState(null);
@@ -413,10 +425,8 @@ export default function App() {
 
   const [globalStats, setGlobalStats] = useState([]);
   const [users, setUsers] = useState([]);
-  const [userId, setUserId] = useState(() => localStorage.getItem('user_id') || '');
-  const [userRole, setUserRole] = useState(() => localStorage.getItem('user_role') || '');
-  const [userIp, setUserIp] = useState('Detecting...');
-  const [showLogin, setShowLogin] = useState(!localStorage.getItem('user_id'));
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(true);
 
   useEffect(() => {
     fetch('https://api.ipify.org?format=json')
@@ -424,13 +434,6 @@ export default function App() {
       .then(data => setUserIp(data.ip))
       .catch(() => setUserIp('127.0.0.1'));
   }, []);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [loadingHistory, setLoadingHistory] = useState(true);
-  const [loginInput, setLoginInput] = useState('');
-  const [passwordInput, setPasswordInput] = useState('');
-  const [loginError, setLoginError] = useState('');
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [isRegisterMode, setIsRegisterMode] = useState(false);
 
   const [yoloLatency, setYoloLatency] = useState(0);
   const [radioLatency, setRadioLatency] = useState(0);
