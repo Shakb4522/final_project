@@ -1,19 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { client } from '@gradio/client';
 import { motion, AnimatePresence } from 'framer-motion';
 import { jsPDF } from "jspdf";
 import Markdown from 'markdown-to-jsx';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, AreaChart, Area, XAxis, YAxis, BarChart, Bar } from 'recharts';
 
+// 4-Class model labels: crack, volumetric, union, surface
 const DEFECT_STANDARDS = {
-  'crack': { std: 'ISO 5817 - Level B', desc: 'Critical structural failure; requires immediate repair.' },
-  'porosity': { std: 'ISO 5817 - Level C', desc: 'Gas entrapment; reduce welding speed or check shielding.' },
-  'slag_inclusion': { std: 'ISO 5817 - Level D', desc: 'Non-metallic trapped matter; check interpass cleaning.' },
-  'undercut': { std: 'ISO 5817 - Level C', desc: 'Groove at the toe; adjust current or electrode angle.' },
-  'lack_of_fusion': { std: 'ISO 5817 - Level B', desc: 'Incomplete bonding; increase heat input or clean surface.' },
-  'spatter': { std: 'ISO 5817 - Surface', desc: 'Metal droplets; check voltage/wire feed speed.' },
-  'defect': { std: 'ISO 5817 - General', desc: 'General anomaly detected in weld integrity.' }
+  'crack':      { std: 'ISO 5817 - Level B / ASME IX QW-462', desc: 'Critical structural crack — immediate rejection or repair mandatory. Re-weld and re-inspect per ASME Section IX.' },
+  'volumetric': { std: 'ISO 5817 - Level C / API 1104 §9.3',  desc: 'Volumetric defect (porosity / slag inclusion) — check gas shielding, interpass cleaning, and heat input parameters.' },
+  'union':      { std: 'ISO 5817 - Level B / ASME IX QW-193', desc: 'Lack of fusion or lack of penetration — increase heat input, clean base material, and verify electrode angle.' },
+  'surface':    { std: 'ISO 5817 - Level D / AWS D1.1 §6.9',  desc: 'Surface irregularity (undercut / spatter / overlap) — adjust current, travel speed, and electrode angle to eliminate.' },
+  'defect':     { std: 'ISO 5817 - General',                   desc: 'General weld anomaly detected. Manual review recommended per applicable inspection standard.' }
 };
 
 const palette = [
@@ -338,6 +336,338 @@ const UsersView = ({ users = [] }) => {
 };
 
 
+// ─── Analytics Stats View ──────────────────────────────────────────────────────
+const AnalyticsView = ({ API_URL, inspections }) => {
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedProject, setSelectedProject] = useState('All');
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/analytics/summary`);
+        if (res.ok) setStats(await res.json());
+      } catch (e) { console.error(e); }
+      finally { setLoading(false); }
+    };
+    fetchStats();
+  }, [API_URL]);
+
+  const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#06b6d4', '#ec4899'];
+
+  if (loading) return (
+    <div className="flex-1 flex items-center justify-center text-slate-500 py-20">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-10 h-10 border-2 border-red-500/50 border-t-red-500 rounded-full animate-spin" />
+        <span className="text-sm uppercase tracking-widest font-bold">Loading Analytics...</span>
+      </div>
+    </div>
+  );
+
+  const projectsList = stats?.project_breakdown || [];
+  const projectNames = ['All', ...projectsList.map(p => p.project_name)];
+
+  // Derived filtered state based on selectedProject
+  let activeTotal = stats?.total_inspections || 0;
+  let activeAccepted = stats?.accepted || 0;
+  let activeRefused = stats?.refused || 0;
+  let activePending = stats?.pending || 0;
+  let activeRate = stats?.acceptance_rate || 0;
+  let activeDefectData = stats?.defect_distribution || [];
+
+  if (selectedProject !== 'All') {
+    const projData = projectsList.find(p => p.project_name === selectedProject);
+    if (projData) {
+      activeTotal = projData.total;
+      activeAccepted = projData.accepted;
+      activeRefused = projData.refused;
+      activePending = 0; // Seeding is complete
+      activeRate = activeTotal ? round(activeAccepted / activeTotal * 100, 1) : 0;
+      activeDefectData = [
+        { type: 'crack', count: projData.cracks },
+        { type: 'volumetric', count: projData.volumetric },
+        { type: 'union', count: projData.union },
+        { type: 'surface', count: projData.surface }
+      ].filter(d => d.count > 0);
+    }
+  }
+
+  // helper function for rounding
+  function round(value, precision) {
+    var multiplier = Math.pow(10, precision || 0);
+    return Math.round(value * multiplier) / multiplier;
+  }
+
+  const rateData = [
+    { name: 'Accepted', value: activeAccepted, color: '#10b981' },
+    { name: 'Refused', value: activeRefused, color: '#ef4444' },
+    { name: 'Pending', value: activePending, color: '#f59e0b' },
+  ].filter(d => d.value > 0);
+
+  const monthlyData = stats?.monthly_trend || [];
+
+  return (
+    <motion.div initial={{opacity:0,y:-10}} animate={{opacity:1,y:0}} className="flex-1 flex flex-col gap-6 w-full pb-10">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-2">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-bold tracking-tight mb-1">
+            <span className="bg-gradient-to-r from-red-500 via-red-400 to-slate-300 bg-clip-text text-transparent">
+              WeldSight Analytics Studio
+            </span>
+          </h2>
+          <p className="text-xs text-slate-500">Aggregated NDT quality assessment indicators across active projects.</p>
+        </div>
+        
+        {/* Dynamic Project Filter Dropdown */}
+        <div className="flex items-center gap-3">
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">Project Scope:</label>
+          <select 
+            value={selectedProject}
+            onChange={(e) => setSelectedProject(e.target.value)}
+            className="bg-slate-900 border border-white/10 rounded-lg px-3 py-2 text-xs font-bold text-slate-300 focus:outline-none focus:border-red-500 cursor-pointer"
+          >
+            {projectNames.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[
+          { label: 'Total Scans', value: activeTotal, color: 'text-white', bg: 'bg-red-500/10' },
+          { label: 'Accepted Welds', value: activeAccepted, color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
+          { label: 'Refused Welds', value: activeRefused, color: 'text-red-400', bg: 'bg-red-500/10' },
+          { label: 'Acceptance Rate', value: `${activeRate}%`, color: 'text-cyan-400', bg: 'bg-cyan-500/10' },
+        ].map((kpi, i) => (
+          <div key={i} className="glass-card p-5 relative overflow-hidden">
+            <div className={`absolute top-0 right-0 w-16 h-16 ${kpi.bg} rounded-bl-full blur-xl`} />
+            <h4 className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1">{kpi.label}</h4>
+            <div className={`text-3xl font-light font-mono ${kpi.color}`}>{kpi.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Visual Charts Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        
+        {/* Defect Distribution */}
+        <div className="glass-card p-6 flex flex-col justify-between">
+          <div>
+            <h4 className="text-xs text-slate-300 uppercase font-black tracking-[0.2em] mb-4">Defect Classification Density</h4>
+            {activeDefectData.length === 0 ? (
+              <div className="flex items-center justify-center h-48 text-slate-600 text-sm italic">No defects identified in project.</div>
+            ) : (
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={activeDefectData.map((d,i)=>({...d, name:d.type, color:COLORS[i%COLORS.length]}))} dataKey="count" innerRadius={55} outerRadius={80} paddingAngle={4}>
+                      {activeDefectData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                    </Pie>
+                    <RechartsTooltip contentStyle={{ backgroundColor: '#0a0e17', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }} itemStyle={{ color: '#fff', fontSize: '12px' }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+          {activeDefectData.length > 0 && (
+            <div className="flex flex-wrap justify-center gap-3 mt-4">
+              {activeDefectData.map((d, i) => (
+                <div key={i} className="flex items-center gap-1.5 text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
+                  {d.type.replace('_', ' ')} ({d.count})
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Verdict Distribution */}
+        <div className="glass-card p-6 flex flex-col justify-between">
+          <div>
+            <h4 className="text-xs text-slate-300 uppercase font-black tracking-[0.2em] mb-4">Structural Audit Verdicts</h4>
+            {rateData.length === 0 ? (
+              <div className="flex items-center justify-center h-48 text-slate-600 text-sm italic">No audit verdicts recorded yet.</div>
+            ) : (
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={rateData} dataKey="value" innerRadius={55} outerRadius={80} paddingAngle={4}>
+                      {rateData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                    </Pie>
+                    <RechartsTooltip contentStyle={{ backgroundColor: '#0a0e17', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }} itemStyle={{ color: '#fff', fontSize: '12px' }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+          {rateData.length > 0 && (
+            <div className="flex flex-wrap justify-center gap-5 mt-4">
+              {rateData.map((d, i) => (
+                <div key={i} className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wider" style={{ color: d.color }}>
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: d.color }} />
+                  {d.name} ({d.value})
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Monthly Trend */}
+        <div className="glass-card p-6 md:col-span-2">
+          <h4 className="text-xs text-slate-300 uppercase font-black tracking-[0.2em] mb-4">Monthly Inspection Trend (Last 6 Months)</h4>
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={monthlyData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                <XAxis dataKey="month" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
+                <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
+                <RechartsTooltip cursor={{fill:'rgba(255,255,255,0.04)'}} contentStyle={{ backgroundColor: '#0a0e17', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }} labelStyle={{ color: '#94a3b8', fontSize: '10px' }} itemStyle={{ color: '#ef4444', fontSize: '12px' }} />
+                <Bar dataKey="count" name="Inspections" fill="#ef4444" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Project Comparison Chart */}
+        <div className="glass-card p-6 md:col-span-2">
+          <h4 className="text-xs text-slate-300 uppercase font-black tracking-[0.2em] mb-6">Industrial Project Cross-Comparison</h4>
+          <div className="h-56">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={projectsList} layout="vertical" margin={{ top: 0, right: 20, left: 10, bottom: 5 }}>
+                <XAxis type="number" stroke="#475569" fontSize={9} tickLine={false} axisLine={false} />
+                <YAxis dataKey="project_name" type="category" stroke="#94a3b8" fontSize={9} width={130} tickLine={false} axisLine={false} />
+                <RechartsTooltip cursor={{fill:'rgba(255,255,255,0.02)'}} contentStyle={{ backgroundColor: '#0a0e17', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }} labelStyle={{ color: '#fff', fontSize: '10px', fontWeight: 'bold' }} itemStyle={{ fontSize: '11px' }} />
+                <Bar dataKey="total" name="Total Scans" fill="#3b82f6" radius={[0, 4, 4, 0]} barSize={12} />
+                <Bar dataKey="accepted" name="Accepted Welds" fill="#10b981" radius={[0, 4, 4, 0]} barSize={12} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Detailed Projects Data Table */}
+        <div className="glass-card p-6 md:col-span-2 overflow-x-auto">
+          <div className="flex items-center justify-between mb-4 border-b border-white/5 pb-3">
+            <h4 className="text-xs text-slate-300 uppercase font-black tracking-[0.2em]">Project Performance Matrix</h4>
+            <span className="text-[10px] text-red-400 font-mono font-bold uppercase">4 Active Industrial Nodes</span>
+          </div>
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-white/10 text-slate-400 uppercase tracking-widest text-[9px] font-black">
+                <th className="py-3 px-2">Project Name</th>
+                <th className="py-3 px-2">Client</th>
+                <th className="py-3 px-2 text-center">Total Scans</th>
+                <th className="py-3 px-2 text-center">Acceptance %</th>
+                <th className="py-3 px-2 text-center text-red-400">Cracks</th>
+                <th className="py-3 px-2 text-center text-blue-400">Volumetric</th>
+                <th className="py-3 px-2 text-center text-orange-400">Lack of Union</th>
+                <th className="py-3 px-2 text-center text-purple-400">Surface</th>
+              </tr>
+            </thead>
+            <tbody>
+              {projectsList.map((p, idx) => {
+                const pRate = p.total ? round(p.accepted / p.total * 100, 1) : 0;
+                return (
+                  <tr key={idx} className="border-b border-white/5 hover:bg-white/5 transition-colors font-mono">
+                    <td className="py-3 px-2 font-bold text-white text-sans">{p.project_name}</td>
+                    <td className="py-3 px-2 text-slate-400">{p.client_name}</td>
+                    <td className="py-3 px-2 text-center font-bold text-slate-300">{p.total}</td>
+                    <td className="py-3 px-2 text-center font-bold text-emerald-400">{pRate}%</td>
+                    <td className="py-3 px-2 text-center text-red-500 font-bold">{p.cracks}</td>
+                    <td className="py-3 px-2 text-center text-blue-400 font-bold">{p.volumetric}</td>
+                    <td className="py-3 px-2 text-center text-orange-500 font-bold">{p.union}</td>
+                    <td className="py-3 px-2 text-center text-purple-500 font-bold">{p.surface}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+// ─── Audit Log View (Admin Only) ────────────────────────────────────────────────
+const AuditLogView = ({ API_URL }) => {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchLogs = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/audit-log`);
+        if (res.ok) setLogs(await res.json());
+      } catch (e) { console.error(e); }
+      finally { setLoading(false); }
+    };
+    fetchLogs();
+    const iv = setInterval(fetchLogs, 10000);
+    return () => clearInterval(iv);
+  }, [API_URL]);
+
+  const modelColors = {
+    '4cls':  'text-red-400 bg-red-500/10 border-red-500/20',
+    'qwen':  'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
+    'yolo':  'text-amber-400 bg-amber-500/10 border-amber-500/20',
+    'radio': 'text-purple-400 bg-purple-500/10 border-purple-500/20',
+  };
+
+  return (
+    <motion.div initial={{opacity:0,y:-10}} animate={{opacity:1,y:0}} className="flex-1 flex flex-col gap-6 w-full">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-bold tracking-tight mb-1">
+            <span className="bg-gradient-to-r from-red-500 via-red-400 to-slate-300 bg-clip-text text-transparent">
+              System Audit Log
+            </span>
+          </h2>
+          <p className="text-xs text-slate-500">Full activity trail for all AI model usage. Admin access only.</p>
+        </div>
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Live — Auto refresh 10s</span>
+        </div>
+      </div>
+
+      <div className="glass-card overflow-hidden border-white/5">
+        {loading ? (
+          <div className="flex items-center justify-center py-20 text-slate-500">
+            <div className="w-8 h-8 border-2 border-red-500/50 border-t-red-500 rounded-full animate-spin mr-4" />
+            Loading audit log...
+          </div>
+        ) : logs.length === 0 ? (
+          <div className="text-center py-20 text-slate-600 text-sm italic">No activity recorded yet.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-white/5 border-b border-white/10">
+                  {['Time', 'User', 'IP Address', 'Action', 'Model'].map(h => (
+                    <th key={h} className="px-5 py-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {logs.map((l, i) => (
+                  <tr key={i} className="hover:bg-white/[0.02] transition-colors">
+                    <td className="px-5 py-3 font-mono text-[11px] text-slate-500">{l.time}</td>
+                    <td className="px-5 py-3 text-sm font-bold text-white">{l.username}</td>
+                    <td className="px-5 py-3 font-mono text-xs text-slate-400">{l.ip}</td>
+                    <td className="px-5 py-3 text-xs text-slate-300">{l.action}</td>
+                    <td className="px-5 py-3">
+                      <span className={`text-[10px] font-black px-2 py-1 rounded border ${modelColors[l.model] || 'text-slate-400 bg-white/5 border-white/10'}`}>
+                        {l.model?.toUpperCase() || '-'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+};
 
 const API_URL = import.meta.env.VITE_API_URL || 
   ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') 
@@ -442,6 +772,14 @@ export default function App() {
   const [currentInspectionId, setCurrentInspectionId] = useState(null);
   const [currentInspectionDecision, setCurrentInspectionDecision] = useState(null);
   const [reportNotes, setReportNotes] = useState("");
+  const [weldForm, setWeldForm] = useState({
+    project_name: '',
+    client_name: '',
+    weld_id: '',
+    thickness_mm: '',
+    standard: 'EN 1435',
+    material: 'Carbon Steel',
+  });
 
   const loadDataForUser = async () => {
     // We allow fetching even if userId is empty (Anonymous mode)
@@ -612,25 +950,29 @@ export default function App() {
     setDetections([]);
 
     try {
-      // Connect to the dual-model Gradio Space
-      // Use the model selected by the user (Auto-Detect, Visual (Photo), or Radiographic (X-Ray))
-      const app = await client("chakib2f2sdf/my-yolo-detector");
-      const result = await app.predict("/predict", [imageFile, "both", analysisModel]);
-      const responseData = result.data?.[1] || {};  
-      const newDetections = Array.isArray(responseData.detections) ? responseData.detections : (Array.isArray(responseData) ? responseData : []);
-      const modelUsed = responseData.model_used || "Unknown";
-      setDetections(newDetections);
+      // ── Local WeldSight-4CLS inference via /api/analyze ──────────────────
+      const formData = new FormData();
+      formData.append("file", imageFile);
 
-      // Log usage to backend based on which model was actually used
-      const modelKey = modelUsed.toLowerCase().includes("radio") ? "radio" : "yolo";
-      fetch(`${API_URL}/api/log-usage/${modelKey}`, {
+      const res = await fetch(`${API_URL}/api/analyze`, {
         method: "POST",
-        headers: { "x-user-id": userId || "Anonymous" }
+        headers: { "x-user-id": userId || "Anonymous" },
+        body: formData,
       });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Server error: ${res.status}`);
+      }
+
+      const responseData = await res.json();
+      const newDetections = Array.isArray(responseData.detections) ? responseData.detections : [];
+      const modelUsed = responseData.model_used || "WeldSight-4CLS";
+      setDetections(newDetections);
 
       // Auto-trigger AI summary
       const boxes_found = newDetections.filter(d => d.type === "box");
-      
+
       // Save to DB
       try {
         const newRecord = {
@@ -640,14 +982,20 @@ export default function App() {
           detections: newDetections,
           username: userId || "Anonymous",
           decision: null,
-          model_used: modelUsed
+          model_used: modelUsed,
+          project_name: weldForm.project_name || "Sonatrach Pipeline A",
+          client_name: weldForm.client_name || "Sonatrach",
+          weld_id: weldForm.weld_id || `W-${Date.now().toString().slice(-6)}`,
+          thickness_mm: parseFloat(weldForm.thickness_mm) || 12.5,
+          standard: weldForm.standard || "EN 1435",
+          material: weldForm.material || "Carbon Steel",
         };
         setCurrentInspectionId(newRecord.id);
         setCurrentInspectionDecision(null);
-        
+
         fetch(`${API_URL}/api/inspections`, {
           method: "POST",
-          headers: { 
+          headers: {
             "Content-Type": "application/json",
             "x-user-id": userId || "Anonymous",
             "x-user-role": userRole || "Inspector"
@@ -660,7 +1008,7 @@ export default function App() {
       triggerAISummary(boxes_found, currentChatId, currentChat.messages);
     } catch (error) {
       console.error(error);
-      alert("Error: " + error.message);
+      alert("Analysis Error: " + error.message);
     } finally {
       setIsProcessing(false);
     }
@@ -1018,23 +1366,42 @@ export default function App() {
         { role: "user", content: inputToUse }
       ];
 
-      const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${import.meta.env.VITE_HF_TOKEN}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "Qwen/Qwen2.5-72B-Instruct",
-          messages: apiMessages,
-          max_tokens: 1000,
-        })
-      });
-
-      if (!response.ok) throw new Error(`API Error: ${response.status}`);
-
-      const data = await response.json();
-      const assistantContent = data.choices[0].message.content;
+      let assistantContent = "";
+      try {
+        const response = await fetch(`${API_URL}/api/chat`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            message: inputToUse,
+            detections: boxes
+          })
+        });
+        if (response.ok) {
+          const data = await response.json();
+          assistantContent = data.response;
+        } else {
+          throw new Error("Local chat failed");
+        }
+      } catch (err) {
+        console.warn("Local chat fallback to Hugging Face:", err);
+        const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${import.meta.env.VITE_HF_TOKEN}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "Qwen/Qwen2.5-72B-Instruct",
+            messages: apiMessages,
+            max_tokens: 1000,
+          })
+        });
+        if (!response.ok) throw new Error(`API Error: ${response.status}`);
+        const data = await response.json();
+        assistantContent = data.choices[0].message.content;
+      }
 
       // Typewriter Effect for manual message
       let displayedContent = "";
@@ -1143,7 +1510,10 @@ export default function App() {
           yoloLatency, radioLatency, qwenLatency, yoloHistory, radioHistory, qwenHistory, showAnnotations, setShowAnnotations, imageFile, setImageFile, runAnalysis, handleImageSelect, focusOnDefect, masks, boxes,
           analysisModel, setAnalysisModel,
           isTrafficModalOpen, setIsTrafficModalOpen, selectedTraffic, setSelectedTraffic, chats, setChats, currentChatId, setCurrentChatId, showHistoryList, setShowHistoryList, 
-          chatInput, setChatInput, typingChatId, setTypingChatId, stopTypingRef, chatEndRef, chatContainerRef, isAtBottomRef, currentChat, handleChatScroll, startNewChat, deleteChat, handleDecision
+          chatInput, setChatInput, typingChatId, setTypingChatId, stopTypingRef, chatEndRef, chatContainerRef, isAtBottomRef, currentChat, handleChatScroll, startNewChat, deleteChat, handleDecision,
+          isRegisterMode, setIsRegisterMode, handleRegister,
+          isLoggingIn, setIsLoggingIn,
+          weldForm, setWeldForm
         }}
       />
     </BrowserRouter>
@@ -1160,29 +1530,42 @@ function AppContent({
   yoloLatency, radioLatency, qwenLatency, yoloHistory, radioHistory, qwenHistory, showAnnotations, setShowAnnotations, imageFile, setImageFile, runAnalysis, handleImageSelect, focusOnDefect, masks, boxes,
   analysisModel, setAnalysisModel,
   isTrafficModalOpen, setIsTrafficModalOpen, selectedTraffic, setSelectedTraffic, chats, setChats, currentChatId, setCurrentChatId, showHistoryList, setShowHistoryList, 
-  chatInput, setChatInput, typingChatId, setTypingChatId, stopTypingRef, chatEndRef, chatContainerRef, isAtBottomRef, currentChat, handleChatScroll, startNewChat, deleteChat, handleDecision
+  chatInput, setChatInput, typingChatId, setTypingChatId, stopTypingRef, chatEndRef, chatContainerRef, isAtBottomRef, currentChat, handleChatScroll, startNewChat, deleteChat, handleDecision,
+  isRegisterMode, setIsRegisterMode, handleRegister,
+  isLoggingIn, setIsLoggingIn,
+  weldForm, setWeldForm
 }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [confThreshold, setConfThreshold] = useState(0.40); // Default NDT threshold 40%
 
-  const pathParts = location.pathname.split('/');
-  const historyIdFromUrl = pathParts[1] === 'history' ? pathParts[2] : null;
-  const selectedHistoryItem = historyIdFromUrl ? inspections.find(i => i.id.toString() === historyIdFromUrl) : null;
+  // Dynamic real-time filter for active scan and report PDF preview
+  const filteredDetections = (detections || []).filter(d => (d.confidence ?? 1.0) >= confThreshold);
+  const filteredBoxes = filteredDetections.filter(d => d.type === 'box');
+  const filteredMasks = filteredDetections.filter(d => d.type === 'mask');
 
   // Map path to tab name for active styling
   const activeTab = location.pathname === '/' ? 'Dashboard' : 
+                    location.pathname.startsWith('/scan') ? 'Scan' :
                     location.pathname.startsWith('/history') ? 'History' :
                     location.pathname.startsWith('/global-traffic') ? 'Global Traffic' :
                     location.pathname.startsWith('/analytics') ? 'Analytics' :
+                    location.pathname.startsWith('/audit') ? 'Audit' :
                     location.pathname.startsWith('/users') ? 'Users' :
                     location.pathname.startsWith('/report') ? 'Report' : 'Dashboard';
 
   const setActiveTab = (tab) => {
-    const path = tab === 'Dashboard' ? '/' : `/${tab.toLowerCase().replace(' ', '-')}`;
+    const path = tab === 'Dashboard' ? '/' : `/${tab.toLowerCase().replace(/ /g, '-')}`;
     navigate(path);
   };
 
+  // History detail: derive selected item from URL path
+  const pathParts = location.pathname.split('/');
+  const historyIdFromUrl = pathParts[1] === 'history' ? pathParts[2] : null;
+  const selectedHistoryItem = (historyIdFromUrl && Array.isArray(inspections)) 
+    ? inspections.find(i => i && i.id && i.id.toString() === historyIdFromUrl) 
+    : null;
   const handleLogout = () => {
     localStorage.removeItem('user_id');
     localStorage.removeItem('user_role');
@@ -1336,10 +1719,14 @@ function AppContent({
           {/* Desktop Nav */}
           <nav className="hidden lg:flex flex-1 items-center justify-center gap-8">
             <button onClick={() => setActiveTab('Dashboard')} className={`text-sm font-medium transition-colors pb-1 border-b-2 ${activeTab === 'Dashboard' ? 'text-red-500 border-red-500' : 'text-slate-400 hover:text-white border-transparent'}`}>Dashboard</button>
+            <button onClick={() => setActiveTab('Scan')} className={`text-sm font-medium transition-colors pb-1 border-b-2 ${activeTab === 'Scan' ? 'text-red-500 border-red-500' : 'text-slate-400 hover:text-white border-transparent'}`}>Scan</button>
             <button onClick={() => setActiveTab('Analytics')} className={`text-sm font-medium transition-colors pb-1 border-b-2 ${activeTab === 'Analytics' ? 'text-red-500 border-red-500' : 'text-slate-400 hover:text-white border-transparent'}`}>Analytics</button>
             <button onClick={() => setActiveTab('Global Traffic')} className={`text-sm font-medium transition-colors pb-1 border-b-2 ${activeTab === 'Global Traffic' ? 'text-red-500 border-red-500' : 'text-slate-400 hover:text-white border-transparent'}`}>Models</button>
             <button onClick={() => setActiveTab('Users')} className={`text-sm font-medium transition-colors pb-1 border-b-2 ${activeTab === 'Users' ? 'text-red-500 border-red-500' : 'text-slate-400 hover:text-white border-transparent'}`}>Users</button>
             <button onClick={() => setActiveTab('History')} className={`text-sm font-medium transition-colors pb-1 border-b-2 ${activeTab === 'History' ? 'text-red-500 border-red-500' : 'text-slate-400 hover:text-white border-transparent'}`}>History</button>
+            {(userRole === 'Lead Inspector' || userRole === 'admin') && (
+              <button onClick={() => setActiveTab('Audit')} className={`text-sm font-medium transition-colors pb-1 border-b-2 ${activeTab === 'Audit' ? 'text-red-500 border-red-500' : 'text-slate-400 hover:text-white border-transparent'}`}>Audit Log</button>
+            )}
           </nav>
 
           {/* Desktop Profile Area */}
@@ -1408,7 +1795,7 @@ function AppContent({
                 </button>
               </div>
               <div className="flex flex-col gap-2 p-4">
-                {['Dashboard', 'Analytics', 'Global Traffic', 'Users', 'History'].map((tab) => (
+                {['Dashboard', 'Scan', 'Analytics', 'Global Traffic', 'Users', 'History', ...(userRole === 'Lead Inspector' || userRole === 'admin' ? ['Audit'] : [])].map((tab) => (
                   <button 
                     key={tab}
                     onClick={() => { setActiveTab(tab); setIsMobileMenuOpen(false); }} 
@@ -1652,7 +2039,7 @@ function AppContent({
               </div>
             </div>
           </motion.div>
-        ) : activeTab === 'Analytics' ? (
+        ) : activeTab === 'Scan' ? (
           <>
             <motion.div initial={{opacity:0, y:-10}} animate={{opacity:1, y:0}} className="text-center mb-4">
               <h2 className="text-lg sm:text-xl font-bold tracking-tight mb-1">
@@ -1682,6 +2069,77 @@ function AppContent({
                 </div>
 
                 <div className="glass-card p-5">
+                  <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Weld Metadata Details</h3>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">Weld ID</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. W-2026-042" 
+                        value={weldForm.weld_id}
+                        onChange={(e) => setWeldForm(f => ({ ...f, weld_id: e.target.value }))}
+                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-red-500 transition-colors"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">Project Name</label>
+                        <input 
+                          type="text" 
+                          placeholder="Pipeline A" 
+                          value={weldForm.project_name}
+                          onChange={(e) => setWeldForm(f => ({ ...f, project_name: e.target.value }))}
+                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-red-500 transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">Client</label>
+                        <input 
+                          type="text" 
+                          placeholder="Sonatrach" 
+                          value={weldForm.client_name}
+                          onChange={(e) => setWeldForm(f => ({ ...f, client_name: e.target.value }))}
+                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-red-500 transition-colors"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">Thickness (mm)</label>
+                        <input 
+                          type="number" 
+                          step="0.1"
+                          placeholder="e.g. 12.5" 
+                          value={weldForm.thickness_mm}
+                          onChange={(e) => setWeldForm(f => ({ ...f, thickness_mm: e.target.value }))}
+                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-red-500 transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">Standard</label>
+                        <select 
+                          value={weldForm.standard}
+                          onChange={(e) => setWeldForm(f => ({ ...f, standard: e.target.value }))}
+                          className="w-full bg-slate-900 border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-red-500 transition-colors"
+                        >
+                          {['EN 1435', 'ASME V', 'ISO 17636', 'API 1104', 'AWS D1.1'].map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">Material</label>
+                      <select 
+                        value={weldForm.material}
+                        onChange={(e) => setWeldForm(f => ({ ...f, material: e.target.value }))}
+                        className="w-full bg-slate-900 border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-red-500 transition-colors"
+                      >
+                        {['Carbon Steel', 'Stainless Steel', 'Alloy Steel', 'Duplex Steel', 'Aluminium'].map(m => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="glass-card p-5">
                   <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">2. Model Selection</h3>
                   <div className="grid grid-cols-1 gap-2">
                     {['Auto-Detect', 'Visual (Photo)', 'Radiographic (X-Ray)'].map(m => (
@@ -1702,6 +2160,28 @@ function AppContent({
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                     <span>{isProcessing ? "Analyzing..." : (detections.length > 0 ? "Analysis Complete" : "Run Neural Analysis")}</span>
                   </button>
+                </div>
+
+                <div className={`glass-card p-5 transition-opacity ${detections.length === 0 ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Confidence Filter</h3>
+                    <span className="text-[10px] font-mono font-black text-red-400 bg-red-500/10 px-2 py-0.5 rounded-md border border-red-500/20">{(confThreshold * 100).toFixed(0)}%</span>
+                  </div>
+                  <div className="space-y-2">
+                    <input 
+                      type="range" 
+                      min="0.10" 
+                      max="0.90" 
+                      step="0.05" 
+                      value={confThreshold} 
+                      onChange={(e) => setConfThreshold(parseFloat(e.target.value))} 
+                      className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-red-500"
+                    />
+                    <div className="flex justify-between text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">
+                      <span>Sensitive (10%)</span>
+                      <span>Strict (90%)</span>
+                    </div>
+                  </div>
                 </div>
 
                 <div className={`glass-card p-5 transition-opacity ${detections.length === 0 ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
@@ -1749,7 +2229,7 @@ function AppContent({
                   {showAnnotations && viewBox && (
                     <svg viewBox={viewBox} preserveAspectRatio="xMidYMid meet" className="absolute inset-0 w-full h-full pointer-events-none">
                       {/* Render Masks */}
-                      {masks.map((mask, idx) => {
+                      {filteredMasks.map((mask, idx) => {
                         if (!mask.points || mask.points.length < 3) return null;
                         const colorObj = getColorForLabel(mask.label);
                         let p0 = mask.points[0];
@@ -1776,7 +2256,7 @@ function AppContent({
                         );
                       })}
                       {/* Render Boxes (Labels) */}
-                      {boxes.map((box, idx) => {
+                      {filteredBoxes.map((box, idx) => {
                         if (!box.xyxy) return null;
                         const [x1, y1, x2, y2] = box.xyxy;
                         
@@ -1789,20 +2269,36 @@ function AppContent({
 
                         const colorObj = getColorForLabel(box.label);
                         const labelText = `${box.label.replace('_', ' ')} ${sizeMm}mm (${(box.confidence * 100).toFixed(0)}%)`;
-                        const textWidth = Math.max(labelText.length * 4 + 6, 30);
-                        const textHeight = 12;
+                        const textWidth = Math.max(labelText.length * 6 + 10, 50); // Improved size computation for readability
+                        const textHeight = 16;
                         const yPos = Math.max(0, y1 - textHeight);
 
                         return (
                           <g key={`box-${idx}`} style={{ cursor: 'pointer' }}>
+                            {/* Bounding Box Defect Outline and Semi-transparent Color Fill */}
                             <rect
-                              x={x1} y={yPos} width={textWidth} height={textHeight} rx="2"
-                              fill={`rgba(${colorObj.rgb}, 0.9)`}
-                              style={{ backdropFilter: 'blur(4px)' }}
+                              x={x1}
+                              y={y1}
+                              width={w}
+                              height={h}
+                              fill={`rgba(${colorObj.rgb}, 0.2)`}
+                              stroke={colorObj.hex}
+                              strokeWidth="2"
+                              style={{ 
+                                transition: 'all 0.3s ease',
+                                filter: `drop-shadow(0 0 3px rgba(${colorObj.rgb}, 0.5))`
+                              }}
+                            />
+                            {/* Floating Label Badge */}
+                            <rect
+                              x={x1} y={yPos} width={textWidth} height={textHeight} rx="3"
+                              fill={`rgba(${colorObj.rgb}, 0.95)`}
+                              stroke={colorObj.hex}
+                              strokeWidth="1"
                             />
                             <text
-                              x={x1 + 3} y={yPos + 9}
-                              className="label-text capitalize"
+                              x={x1 + 5} y={yPos + 12}
+                              className="label-text capitalize font-mono font-bold fill-white text-[10px]"
                             >
                               {labelText}
                             </text>
@@ -1821,7 +2317,7 @@ function AppContent({
             <div className="glass-card p-5 flex-1 flex flex-col max-h-[800px]">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Detection Results</h3>
-                <span className="bg-white/10 text-white text-xs py-1 px-2 rounded-md font-mono">{boxes.length}</span>
+                <span className="bg-white/10 text-white text-xs py-1 px-2 rounded-md font-mono">{filteredBoxes.length}</span>
               </div>
               
               <div className="flex-1 overflow-y-auto pr-2 space-y-3">
@@ -1829,12 +2325,12 @@ function AppContent({
                   <div className="text-center text-slate-500 text-sm mt-8">
                     {imagePreview ? "Ready to analyze." : "Analysis results will appear here."}
                   </div>
-                ) : boxes.length === 0 ? (
+                ) : filteredBoxes.length === 0 ? (
                   <div className="text-center text-emerald-400 text-sm mt-8 bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/20">
                     No defects found. Quality accepted.
                   </div>
                 ) : (
-                  boxes.map((det, idx) => {
+                  filteredBoxes.map((det, idx) => {
                     const confPercent = (det.confidence * 100).toFixed(1);
                     const colorObj = getColorForLabel(det.label);
                     
@@ -1911,7 +2407,7 @@ function AppContent({
                       </div>
 
                       <button 
-                        onClick={() => generatePDFReport(currentInspectionDecision, currentInspectionId, detections, reportNotes)}
+                        onClick={() => generatePDFReport(currentInspectionDecision, currentInspectionId, filteredDetections, reportNotes)}
                         className="w-full py-4 bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-white rounded-xl font-black shadow-lg shadow-red-500/20 flex items-center justify-center gap-3 transition-all transform active:scale-95 uppercase tracking-widest text-xs"
                       >
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
@@ -1970,7 +2466,8 @@ function AppContent({
                         viewBox={viewBox}
                         preserveAspectRatio="xMidYMid meet"
                       >
-                        {selectedHistoryItem.detections.filter(d => d.type === 'mask').map((mask, idx) => {
+                        {/* Render Masks */}
+                        {(selectedHistoryItem.detections || []).filter(d => d.type === 'mask').map((mask, idx) => {
                           if (!mask.points || mask.points.length < 3) return null;
                           const colorObj = getColorForLabel(mask.label);
                           let p0 = mask.points[0];
@@ -1999,6 +2496,44 @@ function AppContent({
                             </g>
                           );
                         })}
+                        {/* Render Boxes */}
+                        {(selectedHistoryItem.detections || []).filter(d => d.type === 'box').map((box, idx) => {
+                          if (!box.xyxy) return null;
+                          const [x1, y1, x2, y2] = box.xyxy;
+                          const w = x2 - x1;
+                          const h = y2 - y1;
+                          const imageWidthPx = imgRef.current ? imgRef.current.naturalWidth : 1;
+                          const mmPerPx = 150 / imageWidthPx;
+                          const sizeMm = (Math.max(w, h) * mmPerPx).toFixed(1);
+                          const colorObj = getColorForLabel(box.label);
+                          const labelText = `${box.label.replace('_', ' ')} ${sizeMm}mm (${(box.confidence * 100).toFixed(0)}%)`;
+                          const textWidth = Math.max(labelText.length * 6 + 10, 50);
+                          const textHeight = 16;
+                          const yPos = Math.max(0, y1 - textHeight);
+                          return (
+                            <g key={`hist-box-${idx}`}>
+                              <rect
+                                x={x1} y={y1} width={w} height={h}
+                                fill={`rgba(${colorObj.rgb}, 0.2)`}
+                                stroke={colorObj.hex}
+                                strokeWidth="2"
+                                style={{ filter: `drop-shadow(0 0 3px rgba(${colorObj.rgb}, 0.5))` }}
+                              />
+                              <rect
+                                x={x1} y={yPos} width={textWidth} height={textHeight} rx="3"
+                                fill={`rgba(${colorObj.rgb}, 0.95)`}
+                                stroke={colorObj.hex}
+                                strokeWidth="1"
+                              />
+                              <text
+                                x={x1 + 5} y={yPos + 12}
+                                className="label-text capitalize font-mono font-bold fill-white text-[10px]"
+                              >
+                                {labelText}
+                              </text>
+                            </g>
+                          );
+                        })}
                       </svg>
                     </div>
                   </div>
@@ -2007,7 +2542,7 @@ function AppContent({
                     <div className="glass-card p-6 flex-1">
                       <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">II. AI Technical Summary</h3>
                       <div className="space-y-3">
-                        {selectedHistoryItem.detections.filter(d => d.type === 'mask').map((det, i) => (
+                        {(selectedHistoryItem.detections || []).map((det, i) => (
                           <div key={i} className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-white/5">
                             <div className="flex items-center gap-3">
                               <span className="text-[9px] font-mono text-slate-500 bg-white/5 px-1.5 py-0.5 rounded">#{i+1}</span>
@@ -2016,7 +2551,7 @@ function AppContent({
                             <span className="text-xs font-mono text-slate-500">{(det.confidence*100).toFixed(1)}% CONF</span>
                           </div>
                         ))}
-                        {selectedHistoryItem.detections.filter(d => d.type === 'mask').length === 0 && (
+                        {(selectedHistoryItem.detections || []).length === 0 && (
                           <div className="py-10 text-center text-slate-500 text-xs italic">No anomalies detected.</div>
                         )}
                       </div>
@@ -2077,7 +2612,7 @@ function AppContent({
                         <button 
                           onClick={() => {
                             setImagePreview(selectedHistoryItem.image || selectedHistoryItem.image_preview);
-                            setDetections(selectedHistoryItem.detections);
+                            setDetections(selectedHistoryItem.detections || []);
                             setCurrentInspectionId(selectedHistoryItem.id);
                             setCurrentInspectionDecision(selectedHistoryItem.decision);
                             setActiveTab('Report');
@@ -2127,7 +2662,7 @@ function AppContent({
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                 {inspections.map((insp, i) => {
-                  const defectCount = insp.detections.filter(d => d.type === 'box').length;
+                  const defectCount = (insp.detections || []).filter(d => d.type === 'box').length;
                   return (
                   <div key={i} className="glass-card p-4 group hover:border-red-500/50 transition-all cursor-pointer relative overflow-hidden" onClick={() => {
                     navigate('/history/' + insp.id);
@@ -2152,7 +2687,7 @@ function AppContent({
                           </div>
                           <span className="text-[10px] text-slate-300 font-bold uppercase tracking-wider">{insp.username || 'Unknown'}</span>
                         </div>
-                        <div className="text-[9px] text-slate-500 font-mono uppercase tracking-wider mb-1">ID #{Math.floor(insp.id || Date.parse(insp.timestamp)).toString().slice(-6)}</div>
+                        <div className="text-[9px] text-slate-500 font-mono uppercase tracking-wider mb-1">ID #{Math.floor(insp.id || Date.parse(insp.timestamp || new Date().toISOString()) || 0).toString().slice(-6)}</div>
                         <div className="text-sm font-bold text-slate-300 group-hover:text-white transition-colors">
                           {String(insp.timestamp || '').split(',')[0]}
                         </div>
@@ -2183,6 +2718,10 @@ function AppContent({
           <motion.div initial={{opacity:0, y:10}} animate={{opacity:1, y:0}} className="flex-1 w-full">
             <UsersView users={users} />
           </motion.div>
+        ) : activeTab === 'Analytics' ? (
+          <AnalyticsView API_URL={API_URL} inspections={inspections} />
+        ) : activeTab === 'Audit' ? (
+          <AuditLogView API_URL={API_URL} />
         ) : null}
           </>} />
         </Routes>
@@ -2425,7 +2964,7 @@ function AppContent({
                   {currentInspectionDecision?.toUpperCase()}
                 </div>
                 <button 
-                  onClick={() => generatePDFReport(currentInspectionDecision, currentInspectionId, detections, reportNotes)}
+                  onClick={() => generatePDFReport(currentInspectionDecision, currentInspectionId, filteredDetections, reportNotes)}
                   className="bg-red-600 hover:bg-red-500 text-white px-6 py-2.5 rounded-lg font-black text-xs uppercase tracking-widest shadow-lg shadow-red-900/40 transition-all flex items-center gap-2"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 10-4 0v4a2 2 0 002 2zm-7 0h2a2 2 0 002-2v-4a2 2 0 10-4 0v4a2 2 0 002 2zM9 9h6M9 13h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
@@ -2454,19 +2993,50 @@ function AppContent({
                 </div>
 
                 <div className="p-16 text-slate-800 flex-1 space-y-12">
-                  {/* Meta Grid */}
-                  <div className="grid grid-cols-3 gap-12 pb-12 border-b border-slate-100">
-                    <div>
-                      <div className="text-[9px] text-slate-400 uppercase font-black tracking-[0.2em] mb-2">Primary Inspector</div>
-                      <div className="text-sm font-bold text-slate-900">{userId || 'Anonymous User'}</div>
+                  {/* Meta Grid & Joint Specifications */}
+                  <div className="grid grid-cols-2 gap-12 pb-12 border-b border-slate-100">
+                    <div className="space-y-4">
+                      <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2">Inspection Metadata</h4>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <div className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-0.5">Primary Inspector</div>
+                          <div className="text-xs font-bold text-slate-900">{userId || 'Anonymous User'}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-0.5">Analysis Date</div>
+                          <div className="text-xs font-bold text-slate-900">{new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-0.5">Weld ID Reference</div>
+                          <div className="text-xs font-mono font-bold text-red-600">{weldForm.weld_id || `W-${String(currentInspectionId || '').slice(-6)}`}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-0.5">Final Verdict</div>
+                          <div className={`text-xs font-black uppercase ${currentInspectionDecision === 'Accepted' ? 'text-emerald-600' : 'text-red-600'}`}>{currentInspectionDecision?.toUpperCase() || 'PENDING'}</div>
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <div className="text-[9px] text-slate-400 uppercase font-black tracking-[0.2em] mb-2">Analysis Date</div>
-                      <div className="text-sm font-bold text-slate-900">{new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</div>
-                    </div>
-                    <div>
-                      <div className="text-[9px] text-slate-400 uppercase font-black tracking-[0.2em] mb-2">Final Verdict</div>
-                      <div className={`text-sm font-black ${currentInspectionDecision === 'Accepted' ? 'text-emerald-600' : 'text-red-600'}`}>{currentInspectionDecision?.toUpperCase()}</div>
+
+                    <div className="space-y-4 border-l border-slate-100 pl-12">
+                      <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2">Joint Specifications</h4>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <div className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-0.5">Project Name</div>
+                          <div className="text-xs font-bold text-slate-900">{weldForm.project_name || 'Sonatrach Pipeline A'}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-0.5">Client Name</div>
+                          <div className="text-xs font-bold text-slate-900">{weldForm.client_name || 'Sonatrach'}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-0.5">Weld Thickness</div>
+                          <div className="text-xs font-bold text-slate-900">{weldForm.thickness_mm ? `${weldForm.thickness_mm} mm` : '12.5 mm'}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] text-slate-400 uppercase font-black tracking-widest mb-0.5">Standard & Mat.</div>
+                          <div className="text-xs font-bold text-slate-900">{weldForm.standard || 'EN 1435'} ({weldForm.material || 'Carbon Steel'})</div>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -2489,7 +3059,7 @@ function AppContent({
                             preserveAspectRatio="xMidYMid meet"
                           >
                             {/* Render Masks */}
-                            {detections.filter(d => d.type === 'mask').map((mask, idx) => {
+                            {filteredMasks.map((mask, idx) => {
                               if (!mask.points || mask.points.length < 3) return null;
                               const colorObj = getColorForLabel(mask.label);
                               let p0 = mask.points[0];
@@ -2514,6 +3084,44 @@ function AppContent({
                                     fill="white" fontSize="14" fontWeight="bold" className="uppercase font-mono"
                                   >
                                     #{idx + 1} {mask.label.replace('_', ' ')}
+                                  </text>
+                                </g>
+                              );
+                            })}
+                            {/* Render Boxes */}
+                            {filteredBoxes.map((box, idx) => {
+                              if (!box.xyxy) return null;
+                              const [x1, y1, x2, y2] = box.xyxy;
+                              const w = x2 - x1;
+                              const h = y2 - y1;
+                              const imageWidthPx = imgRef.current ? imgRef.current.naturalWidth : 1;
+                              const mmPerPx = 150 / imageWidthPx;
+                              const sizeMm = (Math.max(w, h) * mmPerPx).toFixed(1);
+                              const colorObj = getColorForLabel(box.label);
+                              const labelText = `${box.label.replace('_', ' ')} ${sizeMm}mm (${(box.confidence * 100).toFixed(0)}%)`;
+                              const textWidth = Math.max(labelText.length * 6 + 10, 50);
+                              const textHeight = 16;
+                              const yPos = Math.max(0, y1 - textHeight);
+                              return (
+                                <g key={`rep-box-${idx}`}>
+                                  <rect
+                                    x={x1} y={y1} width={w} height={h}
+                                    fill={`rgba(${colorObj.rgb}, 0.2)`}
+                                    stroke={colorObj.hex}
+                                    strokeWidth="2"
+                                    style={{ filter: `drop-shadow(0 0 3px rgba(${colorObj.rgb}, 0.5))` }}
+                                  />
+                                  <rect
+                                    x={x1} y={yPos} width={textWidth} height={textHeight} rx="3"
+                                    fill={`rgba(${colorObj.rgb}, 0.95)`}
+                                    stroke={colorObj.hex}
+                                    strokeWidth="1"
+                                  />
+                                  <text
+                                    x={x1 + 5} y={yPos + 12}
+                                    className="label-text capitalize font-mono font-bold fill-white text-[10px]"
+                                  >
+                                    {labelText}
                                   </text>
                                 </g>
                               );
@@ -2543,7 +3151,7 @@ function AppContent({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50">
-                          {detections.filter(d => d.type === 'mask').map((det, i) => {
+                          {filteredDetections.map((det, i) => {
                             const data = DEFECT_STANDARDS[det.label.toLowerCase()] || DEFECT_STANDARDS['defect'];
                             return (
                               <tr key={i} className="group hover:bg-slate-50/50 transition-colors">
@@ -2563,7 +3171,7 @@ function AppContent({
                               </tr>
                             );
                           })}
-                          {detections.filter(d => d.type === 'mask').length === 0 && (
+                          {filteredDetections.length === 0 && (
                             <tr>
                               <td colSpan="3" className="px-6 py-10 text-center text-slate-400 italic font-medium">Clear scan. No anomalies detected in current neural layer.</td>
                             </tr>
