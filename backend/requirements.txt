@@ -1,5 +1,8 @@
 fastapi
-uvicorn
+uvicorn[standard]
 motor
 python-dotenv
 pydantic
+ultralytics
+pillow
+python-multipart
