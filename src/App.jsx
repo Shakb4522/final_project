@@ -715,6 +715,7 @@ export default function App() {
   const [analysisModel, setAnalysisModel] = useState('Auto-Detect');
   const [rtModelClass, setRtModelClass] = useState('4cls');
   const [vtModelClass, setVtModelClass] = useState('4cls');
+  const [currentModelUsed, setCurrentModelUsed] = useState('');
 
   // Chat History State
   const [chats, setChats] = useState(() => {
@@ -991,6 +992,7 @@ export default function App() {
       const newDetections = Array.isArray(responseData.detections) ? responseData.detections : [];
       const modelUsed = responseData.model_used || "WeldSight-4CLS";
       setDetections(newDetections);
+      setCurrentModelUsed(modelUsed);
 
       // Auto-trigger AI summary
       const boxes_found = newDetections.filter(d => d.type === "box");
@@ -1576,8 +1578,10 @@ function AppContent({
   const retrainSvgRef = useRef(null);
 
   const openRetrainStudio = () => {
-    setRetrainBoxes(filteredBoxes.map(box => ({ ...box, hidden: false })));
+    const sourceDetections = isVisualInspection ? filteredMasks : filteredBoxes;
+    setRetrainBoxes(sourceDetections.map(det => ({ ...det, hidden: false })));
     setRetrainClass("porosity");
+    setRetrainDrawMode(isVisualInspection ? "segment" : "box");
     setIsRetrainStudioOpen(true);
   };
 
@@ -1714,6 +1718,11 @@ function AppContent({
   const filteredDetections = (detections || []).filter(d => (d.confidence ?? 1.0) >= confThreshold);
   const filteredBoxes = filteredDetections.filter(d => d.type === 'box');
   const filteredMasks = filteredDetections.filter(d => d.type === 'mask');
+  const isVisualInspection = analysisModel === 'Visual (Photo)' || 
+    (analysisModel === 'Auto-Detect' && (
+      currentModelUsed.toLowerCase().includes('visual') || 
+      currentModelUsed.toLowerCase().includes('vt')
+    ));
 
   // Map path to tab name for active styling
   const activeTab = location.pathname === '/' ? 'Dashboard' : 
@@ -2546,36 +2555,39 @@ function AppContent({
 
                         const colorObj = getColorForLabel(box.label);
                         const labelText = `${box.label.replace('_', ' ')} ${sizeMm}mm (${(box.confidence * 100).toFixed(0)}%)`;
-                        const textWidth = Math.max(labelText.length * 6 + 10, 50); // Improved size computation for readability
-                        const textHeight = 16;
-                        const yPos = Math.max(0, y1 - textHeight);
+                        const textWidth = Math.max(labelText.length * 7.5 + 14, 60);
+                        const textHeight = 22;
+                        const yPos = Math.max(0, y1 - textHeight - 2);
 
                         return (
                           <g key={`box-${idx}`} style={{ cursor: 'pointer' }}>
-                            {/* Bounding Box Defect Outline and Semi-transparent Color Fill */}
-                            <rect
-                              x={x1}
-                              y={y1}
-                              width={w}
-                              height={h}
-                              fill={`rgba(${colorObj.rgb}, 0.2)`}
-                              stroke={colorObj.hex}
-                              strokeWidth="2"
-                              style={{ 
-                                transition: 'all 0.3s ease',
-                                filter: `drop-shadow(0 0 3px rgba(${colorObj.rgb}, 0.5))`
-                              }}
-                            />
+                            {/* Bounding Box Defect Outline — hidden for Visual inspections (mask-only) */}
+                            {!isVisualInspection && (
+                              <rect
+                                x={x1}
+                                y={y1}
+                                width={w}
+                                height={h}
+                                fill={`rgba(${colorObj.rgb}, 0.2)`}
+                                stroke={colorObj.hex}
+                                strokeWidth="2"
+                                style={{ 
+                                  transition: 'all 0.3s ease',
+                                  filter: `drop-shadow(0 0 3px rgba(${colorObj.rgb}, 0.5))`
+                                }}
+                              />
+                            )}
                             {/* Floating Label Badge */}
                             <rect
-                              x={x1} y={yPos} width={textWidth} height={textHeight} rx="3"
+                              x={x1} y={yPos} width={textWidth} height={textHeight} rx="4"
                               fill={`rgba(${colorObj.rgb}, 0.95)`}
                               stroke={colorObj.hex}
                               strokeWidth="1"
                             />
                             <text
-                              x={x1 + 5} y={yPos + 12}
-                              className="label-text capitalize font-mono font-bold fill-white text-[10px]"
+                              x={x1 + 6} y={yPos + 16}
+                              className="label-text capitalize font-mono font-bold fill-white"
+                              style={{ fontSize: '13px' }}
                             >
                               {labelText}
                             </text>
@@ -2903,6 +2915,7 @@ function AppContent({
                           onClick={() => {
                             setImagePreview(selectedHistoryItem.image || selectedHistoryItem.image_preview);
                             setDetections(selectedHistoryItem.detections || []);
+                            setCurrentModelUsed(selectedHistoryItem.model_used || '');
                             setCurrentInspectionId(selectedHistoryItem.id);
                             setCurrentInspectionDecision(selectedHistoryItem.decision);
                             setActiveTab('Report');
