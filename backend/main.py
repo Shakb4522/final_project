@@ -294,7 +294,8 @@ async def analyze_image(
         return {
             "detections": detections,
             "model_used": model_version,
-            "preprocessed_image": preprocessed_image_url
+            "preprocessed_image": preprocessed_image_url,
+            "class_names": list(class_names.values())
         }
 
     except Exception as e:

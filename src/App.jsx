@@ -724,6 +724,7 @@ export default function App() {
   const [rtModelClass, setRtModelClass] = useState('4cls');
   const [vtModelClass, setVtModelClass] = useState('4cls');
   const [currentModelUsed, setCurrentModelUsed] = useState('');
+  const [modelClassNames, setModelClassNames] = useState([]);
 
   // Chat History State
   const [chats, setChats] = useState(() => {
@@ -1001,6 +1002,9 @@ export default function App() {
       const modelUsed = responseData.model_used || "WeldSight-4CLS";
       setDetections(newDetections);
       setCurrentModelUsed(modelUsed);
+      if (Array.isArray(responseData.class_names)) {
+        setModelClassNames(responseData.class_names);
+      }
 
       // Auto-trigger AI summary
       const boxes_found = newDetections.filter(d => d.type === "box");
@@ -1540,7 +1544,7 @@ export default function App() {
           showChat, setShowChat, isMobileMenuOpen, setIsMobileMenuOpen, imgRef, handleImageLoad, viewBox,
           getColorForLabel, triggerAISummary, generatePDFReport, sendMessage, DEFECT_STANDARDS, API_URL, isProcessing,
           yoloLatency, radioLatency, qwenLatency, yoloHistory, radioHistory, qwenHistory, showAnnotations, setShowAnnotations, imageFile, setImageFile, runAnalysis, handleImageSelect, focusOnDefect, masks, boxes,
-          analysisModel, setAnalysisModel, rtModelClass, setRtModelClass, vtModelClass, setVtModelClass, currentModelUsed, setCurrentModelUsed,
+          analysisModel, setAnalysisModel, rtModelClass, setRtModelClass, vtModelClass, setVtModelClass, currentModelUsed, setCurrentModelUsed, modelClassNames, setModelClassNames,
           isTrafficModalOpen, setIsTrafficModalOpen, selectedTraffic, setSelectedTraffic, chats, setChats, currentChatId, setCurrentChatId, showHistoryList, setShowHistoryList, 
           chatInput, setChatInput, typingChatId, setTypingChatId, stopTypingRef, chatEndRef, chatContainerRef, isAtBottomRef, currentChat, handleChatScroll, startNewChat, deleteChat, handleDecision,
           isRegisterMode, setIsRegisterMode, handleRegister,
@@ -1560,7 +1564,7 @@ function AppContent({
   showChat, setShowChat, isMobileMenuOpen, setIsMobileMenuOpen, imgRef, handleImageLoad, viewBox,
   getColorForLabel, triggerAISummary, generatePDFReport, sendMessage, DEFECT_STANDARDS, API_URL, isProcessing,
   yoloLatency, radioLatency, qwenLatency, yoloHistory, radioHistory, qwenHistory, showAnnotations, setShowAnnotations, imageFile, setImageFile, runAnalysis, handleImageSelect, focusOnDefect, masks, boxes,
-  analysisModel, setAnalysisModel, rtModelClass, setRtModelClass, vtModelClass, setVtModelClass, currentModelUsed, setCurrentModelUsed,
+  analysisModel, setAnalysisModel, rtModelClass, setRtModelClass, vtModelClass, setVtModelClass, currentModelUsed, setCurrentModelUsed, modelClassNames, setModelClassNames,
   isTrafficModalOpen, setIsTrafficModalOpen, selectedTraffic, setSelectedTraffic, chats, setChats, currentChatId, setCurrentChatId, showHistoryList, setShowHistoryList, 
   chatInput, setChatInput, typingChatId, setTypingChatId, stopTypingRef, chatEndRef, chatContainerRef, isAtBottomRef, currentChat, handleChatScroll, startNewChat, deleteChat, handleDecision,
   isRegisterMode, setIsRegisterMode, handleRegister,
@@ -1788,6 +1792,32 @@ function AppContent({
     ));
 
   const getRetrainClasses = () => {
+    // If the backend returned actual class names, use them directly
+    if (modelClassNames && modelClassNames.length > 0) {
+      const dynamicPalette = [
+        { color: "#ef4444", rgb: "239,68,68" },
+        { color: "#3b82f6", rgb: "59,130,246" },
+        { color: "#10b981", rgb: "16,185,129" },
+        { color: "#f59e0b", rgb: "245,158,11" },
+        { color: "#8b5cf6", rgb: "139,92,246" },
+        { color: "#ec4899", rgb: "236,72,153" },
+        { color: "#14b8a6", rgb: "20,184,166" },
+        { color: "#64748b", rgb: "100,116,139" }
+      ];
+      return modelClassNames.map((name, i) => {
+        // Try to find a matching entry in the master lookup table
+        const existing = RETRAIN_CLASSES.find(c => c.id === name);
+        const pal = dynamicPalette[i % dynamicPalette.length];
+        return {
+          id: name,
+          name: name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+          color: existing ? existing.color : pal.color,
+          rgb: existing ? existing.rgb : pal.rgb
+        };
+      });
+    }
+
+    // Fallback: use hardcoded defaults based on model selection
     if (isVisualInspection) {
       if (vtModelClass === 'binary') {
         return [
@@ -1795,7 +1825,6 @@ function AppContent({
           { id: "good_weld", name: "Good Weld", color: "#10b981", rgb: "16,185,129" }
         ];
       } else {
-        // VT 6-class (crack, good weld, bad weld, porosity, slag, undercut)
         return [
           { id: "crack", name: "Crack", color: "#ef4444", rgb: "239,68,68" },
           { id: "good_weld", name: "Good Weld", color: "#10b981", rgb: "16,185,129" },
@@ -1806,11 +1835,9 @@ function AppContent({
         ];
       }
     } else {
-      // Radiographic (RT)
       if (rtModelClass === 'binary') {
         return [
-          { id: "defect", name: "Defect", color: "#ef4444", rgb: "239,68,68" },
-          { id: "good_weld", name: "Good Weld", color: "#10b981", rgb: "16,185,129" }
+          { id: "defect", name: "Defect", color: "#ef4444", rgb: "239,68,68" }
         ];
       } else if (rtModelClass === '4cls') {
         return [
@@ -1820,7 +1847,6 @@ function AppContent({
           { id: "surface", name: "Surface", color: "#8b5cf6", rgb: "139,92,246" }
         ];
       } else {
-        // 7-class
         return [
           { id: "crack", name: "Crack", color: "#ef4444", rgb: "239,68,68" },
           { id: "porosity", name: "Porosity", color: "#3b82f6", rgb: "59,130,246" },
@@ -1828,8 +1854,7 @@ function AppContent({
           { id: "slag", name: "Slag inclusion", color: "#10b981", rgb: "16,185,129" },
           { id: "undercut", name: "Undercut", color: "#8b5cf6", rgb: "139,92,246" },
           { id: "inclusion", name: "Inclusion", color: "#ec4899", rgb: "236,72,153" },
-          { id: "spatter", name: "Spatter", color: "#64748b", rgb: "100,116,139" },
-          { id: "defect", name: "Defect", color: "#ef4444", rgb: "239,68,68" }
+          { id: "spatter", name: "Spatter", color: "#64748b", rgb: "100,116,139" }
         ];
       }
     }
