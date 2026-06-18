@@ -33,8 +33,7 @@ __pycache__/
 
 # Datasets
 WeldSight_RT_Master/
-# *.pt
-!backend/*.pt
+*.pt
 *.cache
 *.ipynb
 scratch/
