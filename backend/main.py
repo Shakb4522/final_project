@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,11 +10,12 @@ import io
 import time
 import shutil
 import tempfile
+import base64
 from pathlib import Path
 from dotenv import load_dotenv
-from PIL import Image
 import cv2
 import numpy as np
+from ultralytics import YOLO
 from huggingface_hub import hf_hub_download
 
 load_dotenv()
@@ -41,90 +42,100 @@ MONGODB_URI = os.getenv(
 mongo_client = AsyncIOMotorClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
 db = mongo_client.inspection_hub
 
-# ─── YOLOv8 Local & Hub Models ──────────────────────────────────────────────────
-_visual_model = None
-_radio_model = None
+# Your Hugging Face model repository
+HF_MODEL_REPO = "chakib2f2sdf/weldsight-yolo-models"
 
-def get_visual_model():
-    global _visual_model
-    if _visual_model is None:
+# In-memory dictionary to hold loaded models
+_models = {
+    "radio": {"binary": None, "4cls": None, "7cls": None},
+    "visual": {"binary": None, "4cls": None, "7cls": None}
+}
+
+MODEL_VERSIONS = {
+    "4cls": "WeldSight-Space-4CLS (P:84.3% R:75.6% mAP50:78.5%)",
+    "binary": "WeldSight-Space-Binary (P:93.0% R:79.7% mAP50:88.0%)",
+    "7cls": "WeldSight-Space-7CLS-Elite (P:79.7% R:78.1% mAP50:79.5%)"
+}
+
+def download_and_load_model(inspection_type: str, model_type: str) -> YOLO:
+    global _models
+    
+    filenames = {
+        "radio": {
+            "binary": "RT_binary.pt",
+            "4cls": "RT_4classe.pt",
+            "7cls": "RT_7classes.pt"
+        },
+        "visual": {
+            "binary": "VT_binary.pt",
+            "4cls": "VT_6classes.pt",
+            "7cls": "VT_6classes.pt"
+        }
+    }
+    
+    filename = filenames[inspection_type][model_type]
+    
+    if _models[inspection_type][model_type] is None:
+        print(f"[Loading] Fetching {filename} from Hub repo: {HF_MODEL_REPO}...")
         try:
-            from ultralytics import YOLO
-            # Visual inspection model (color photographs of welds)
             model_path = hf_hub_download(
-                repo_id="chakib2f2sdf/my-yolo-detector",
-                filename="best.pt"
+                repo_id=HF_MODEL_REPO,
+                filename=filename,
+                token=os.getenv("HF_TOKEN")
             )
-            _visual_model = YOLO(model_path)
-            print(f"[WeldSight] [OK] Loaded Visual YOLOv8 Model: {model_path}")
+            try:
+                device = "cuda" if cv2.cuda.getCudaEnabledDeviceCount() > 0 else "cpu"
+            except AttributeError:
+                import torch
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                
+            _models[inspection_type][model_type] = YOLO(model_path).to(device)
+            print(f"[Success] Loaded model [{inspection_type} -> {model_type}] to {device}")
         except Exception as e:
-            print(f"[WeldSight] [FAIL] Failed to load Visual YOLOv8 Model: {e}")
-    return _visual_model
-
-def get_radio_model():
-    global _radio_model
-    if _radio_model is None:
-        try:
-            from ultralytics import YOLO
-            # Radiographic inspection model (X-ray / RT images of welds)
-            model_path = hf_hub_download(
-                repo_id="chakib2f2sdf/Radio_model",
-                filename="best.pt"
-            )
-            _radio_model = YOLO(model_path)
-            print(f"[WeldSight] [OK] Loaded Radiographic YOLOv8 Model: {model_path}")
-        except Exception as e:
-            print(f"[WeldSight] [FAIL] Failed to load Radiographic YOLOv8 Model: {e}")
-    return _radio_model
+            print(f"[Error] Failed to load model {filename}: {e}")
+            raise RuntimeError(f"Failed to load model {filename}: {e}")
+            
+    return _models[inspection_type][model_type]
 
 
-def classify_image_type(pil_image: Image.Image) -> str:
-    """
-    Determines whether an image is a radiographic (X-ray) or visual (photo).
-    Radiographic images are nearly always grayscale with very low color saturation.
-    """
-    img = pil_image.convert("RGB")
-    arr = np.array(img, dtype=np.float32)
-
-    # ---- Check 1: Color saturation ----
-    pixel_chroma = arr.max(axis=2) - arr.min(axis=2)          # shape (H, W)
-    mean_chroma = pixel_chroma.mean()
-
-    # ---- Check 2: Fraction of near-gray pixels ----
-    gray_fraction = (pixel_chroma < 15).mean()
-
-    # Decision: if >92% of pixels are gray AND mean chroma is low → radiograph
-    if gray_fraction > 0.92 and mean_chroma < 20:
-        return "radio"
-    return "visual"
+def classify_image_type(image_path: str) -> str:
+    try:
+        img = cv2.imread(image_path)
+        if img is not None and len(img.shape) == 3:
+            b, g, r = cv2.split(img)
+            if not (np.allclose(b, g) and np.allclose(g, r)):
+                return "visual"
+    except Exception as ex:
+        print(f"[Classifier] Error: {ex}. Defaulting to radio.")
+    return "radio"
 
 
-def preprocess_radio_image(pil_image: Image.Image) -> Image.Image:
-    """
-    Applies CLAHE (Contrast Limited Adaptive Histogram Equalization)
-    and denoising to enhance X-ray features.
-    """
-    # Convert to OpenCV format (grayscale for radiography)
-    img_array = np.array(pil_image.convert("L"))
-    
-    # 1. Denoising (Non-local Means Denoising)
-    denoised = cv2.fastNlMeansDenoising(img_array, None, h=10, templateWindowSize=7, searchWindowSize=21)
-    
-    # 2. CLAHE (Contrast Enhancement)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(denoised)
-    
-    # Convert back to PIL RGB (YOLO expects 3 channels)
-    result = Image.fromarray(enhanced).convert("RGB")
-    return result
+def preprocess_radio_image(image_path: str):
+    try:
+        img_array = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        if img_array is not None:
+            denoised = cv2.fastNlMeansDenoising(img_array, None, h=10, templateWindowSize=7, searchWindowSize=21)
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(denoised)
+            cv2.imwrite(image_path, enhanced)
+    except Exception as e:
+        print(f"[Preprocessing] Preprocessing failed: {e}")
 
 
 @app.on_event("startup")
 async def startup():
+    # Pre-load models from HF
+    print(f"[Startup] Pre-loading models from: {HF_MODEL_REPO}")
+    for insp_type in ["radio", "visual"]:
+        for model_type in ["binary", "4cls"]:
+            try:
+                download_and_load_model(insp_type, model_type)
+            except Exception as e:
+                print(f"[Startup Warn] Pre-loading failed for [{insp_type} -> {model_type}]: {e}")
     # Seed default MongoDB users
     try:
         await mongo_client.admin.command("ping")
-        print("[WeldSight] [OK] MongoDB connected")
+        print("[WeldSight] ✅ MongoDB connected")
         for u, pw, role in [
             ("admin", "admin123", "Lead Inspector"),
             ("chakib", "chakib123", "Inspector"),
@@ -134,7 +145,7 @@ async def startup():
                 await db.registered_users.insert_one({"username": u, "password": pw, "role": role})
                 print(f"[WeldSight] Seeded user: {u}")
     except Exception as e:
-        print(f"[WeldSight] [WARN] MongoDB error: {e}")
+        print(f"[WeldSight] ⚠️ MongoDB error: {e}")
 
 
 # ─── Pydantic Models ───────────────────────────────────────────────────────────
@@ -178,9 +189,8 @@ async def log_model_usage(request: Request, model_type: str):
     now = time.time()
     action_map = {
         "4cls":  "Used WeldSight-4CLS Local Model",
-        "yolo":  "Used Visual YOLOv8 Model",
-        "radio": "Used Radiographic YOLOv8 Model",
-        "qwen":  "Used Qwen AI Chat",
+        "binary": "Used WeldSight-Binary Local Model",
+        "7cls": "Used WeldSight-7CLS-Elite Local Model",
     }
     await db.activity.insert_one({
         "ip": ip, "username": username,
@@ -194,100 +204,106 @@ async def log_model_usage(request: Request, model_type: str):
     )
 
 
-# ─── 🔥 DUAL MODEL LOCAL INFERENCE ─────────────────────────────────────────────
+# ─── 🔥 LOCAL MODEL INFERENCE ─────────────────────────────────────────────────
 
 @app.post("/api/analyze")
-async def analyze_image(request: Request, file: UploadFile = File(...)):
-    """
-    Run local dual-model WeldSight prediction on an uploaded weld scan.
-    Chooses visual or radiographic model dynamically (or by manual choice).
-    """
-    model_choice = request.headers.get("x-model-choice", "Auto-Detect")
-    
-    # Read the file content as PIL image
-    file_bytes = await file.read()
-    try:
-        pil_image = Image.open(io.BytesIO(file_bytes))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid image file: {e}")
+async def analyze_image(
+    request: Request,
+    file: UploadFile = File(...),
+    model_type: str = Query("4cls"),
+    inspection_type: str = Query("auto")
+):
+    if model_type not in ["4cls", "binary", "7cls"]:
+        model_type = "4cls"
 
-    # Determine visual vs radiographic
-    if model_choice == "Auto-Detect":
-        detected_type = classify_image_type(pil_image)
-    elif model_choice == "Visual (Photo)":
-        detected_type = "visual"
-    else:
-        detected_type = "radio"
-
-    # Select model
-    if detected_type == "radio":
-        model = get_radio_model()
-        model_label = "Radiographic (X-Ray)"
-        model_key = "radio"
-    else:
-        model = get_visual_model()
-        model_label = "Visual (Photo)"
-        model_key = "yolo"
-
-    if model is None:
-        raise HTTPException(status_code=503, detail=f"{model_label} model is currently not loaded.")
-
-    # Preprocess radiographic images
-    analysis_image = pil_image
-    if detected_type == "radio":
-        analysis_image = preprocess_radio_image(pil_image)
-
-    # Save to temp file for ultralytics YOLOv8 run
     suffix = Path(file.filename).suffix or ".jpg"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        analysis_image.save(tmp.name)
+        shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
 
     try:
-        # Run prediction (support segmentation if masks exist in the model)
-        results = model.predict(source=tmp_path, task="segment", conf=0.25, verbose=False)
-        r = results[0]
+        resolved_type = inspection_type
+        if resolved_type == "auto":
+            resolved_type = classify_image_type(tmp_path)
+
+        # Download and load the model on-demand
+        model = download_and_load_model(resolved_type, model_type)
+
+        if resolved_type == "radio":
+            preprocess_radio_image(tmp_path)
+
+        with open(tmp_path, "rb") as f:
+            b64_data = base64.b64encode(f.read()).decode("utf-8")
+        preprocessed_image_url = f"data:image/jpeg;base64,{b64_data}"
+
+        if model_type == "4cls":
+            imgsz = 1280
+        elif model_type == "7cls":
+            imgsz = 640
+        else:
+            imgsz = 1024
+
+        try:
+            device = "cuda" if cv2.cuda.getCudaEnabledDeviceCount() > 0 else "cpu"
+        except AttributeError:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        results = model(tmp_path, imgsz=imgsz, conf=0.10, verbose=False, device=device)
         
         detections = []
-        
-        # 1. Box detections
-        if r.boxes is not None:
-            for box in r.boxes:
+        class_names = getattr(model, "names", {})
+
+        for result in results:
+            boxes = result.boxes
+            masks = getattr(result, "masks", None)
+            
+            if boxes is None:
+                continue
+
+            for i, box in enumerate(boxes):
                 cls_id = int(box.cls[0].item())
-                conf = round(float(box.conf[0].item()), 4)
+                conf   = float(box.conf[0].item())
                 x1, y1, x2, y2 = [float(v) for v in box.xyxy[0].tolist()]
-                label = r.names.get(cls_id, f"class_{cls_id}")
+                label  = class_names.get(cls_id, f"class_{cls_id}")
+
                 detections.append({
-                    "type": "box",
-                    "label": label,
+                    "type":       "box",
+                    "label":      label,
                     "confidence": conf,
-                    "xyxy": [x1, y1, x2, y2]
+                    "xyxy":       [x1, y1, x2, y2],
                 })
 
-        # 2. Polygon masks
-        if hasattr(r, "masks") and r.masks is not None:
-            for i in range(len(r.masks)):
-                cls_id = int(r.boxes.cls[i].item())
-                conf = round(float(r.boxes.conf[i].item()), 4)
-                points = r.masks.xy[i].tolist() if len(r.masks.xy) > i else []
-                label = r.names.get(cls_id, f"class_{cls_id}")
-                detections.append({
-                    "type": "mask",
-                    "label": label,
-                    "confidence": conf,
-                    "points": points
-                })
+                if masks is not None and i < len(masks.xy):
+                    poly = masks.xy[i]
+                    if len(poly) >= 3:
+                        points = [[float(p[0]), float(p[1])] for p in poly]
+                        detections.append({
+                            "type":       "mask",
+                            "label":      label,
+                            "confidence": conf,
+                            "points":     points,
+                            "xyxy":       [x1, y1, x2, y2],
+                        })
 
-        # Log usage to telemetry
-        await log_model_usage(request, model_key)
+        model_version = f"WeldSight-VT-Visual" if resolved_type == "visual" else MODEL_VERSIONS.get(model_type, model_type)
+
+        # Log usage in our DB
+        await log_model_usage(request, model_type)
 
         return {
             "detections": detections,
-            "model_used": f"WeldSight {model_label}"
+            "model_used": model_version,
+            "preprocessed_image": preprocessed_image_url
         }
 
+    except Exception as e:
+        print(f"[Error] Inference failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+        
     finally:
-        os.unlink(tmp_path)
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 # ─── Auth ──────────────────────────────────────────────────────────────────────
@@ -323,32 +339,18 @@ async def register(user: UserRegister):
 async def get_global_stats():
     return [
         {
-            "model_name":  "WeldSight-Visual-YOLOv8",
-            "model_key":   "yolo",
-            "status":      "OPERATIONAL",
-            "uptime":      "99.98%",
-            "description": "Local YOLOv8 Visual Defect Detector (crack / volumetric / union / surface) optimized for standard weld photographs.",
-        },
-        {
-            "model_name":  "WeldSight-Radiographic-YOLOv8",
-            "model_key":   "radio",
+            "model_name":  "WeldSight-4CLS-Local",
+            "model_key":   "4cls",
             "status":      "OPERATIONAL",
             "uptime":      "99.99%",
-            "description": "Local YOLOv8 Radiographic Defect Detector with CLAHE contrast enhancement & fastNlMeans denoising.",
-        },
-        {
-            "model_name":  "Qwen-2.5-72B-Expert",
-            "model_key":   "qwen",
-            "status":      "OPERATIONAL",
-            "uptime":      "99.95%",
-            "description": "Expert AI consultation for industrial standards (ISO 5817, ASME IX, API 1104) and defect troubleshooting.",
+            "description": "Local 4-class radiographic defect detector (crack / volumetric / union / surface). P:78.8% R:67.8% mAP50:72.3%",
         },
     ]
 
 
 @app.get("/api/model-details/{model_key}")
 async def get_model_details(model_key: str):
-    if model_key not in ["4cls", "yolo", "radio", "qwen"]:
+    if model_key not in ["4cls", "yolo", "radio"]:
         raise HTTPException(status_code=400, detail="Invalid model key")
     now = time.time()
     five_min_ago = now - 300
@@ -365,7 +367,7 @@ async def get_model_details(model_key: str):
 
 @app.get("/api/model-logs/{model_key}")
 async def get_model_logs(model_key: str):
-    if model_key not in ["4cls", "yolo", "radio", "qwen"]:
+    if model_key not in ["4cls", "yolo", "radio"]:
         raise HTTPException(status_code=400, detail="Invalid model key")
     logs = await db.activity.find({"model_type": model_key}).sort("timestamp", -1).to_list(5000)
     return [{"username": l.get("username"), "ip": l.get("ip", "0.0.0.0"), "action": l.get("action", ""), "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(l.get("timestamp", time.time())))} for l in logs]
@@ -373,7 +375,7 @@ async def get_model_logs(model_key: str):
 
 @app.post("/api/test-traffic/{model_key}")
 async def test_traffic(model_key: str, request: Request):
-    if model_key not in ["4cls", "yolo", "radio", "qwen"]:
+    if model_key not in ["4cls", "yolo", "radio"]:
         raise HTTPException(status_code=400, detail="Invalid model key")
     username = request.headers.get("x-user-id", "Anonymous")
     forwarded = request.headers.get("x-forwarded-for")
@@ -383,9 +385,8 @@ async def test_traffic(model_key: str, request: Request):
     latency_ms = round((time.time() - start) * 1000, 1)
     servers = {
         "4cls":  {"host": "localhost (WeldSight-4CLS)", "ip": "127.0.0.1", "region": "Local GPU (RTX 4060)"},
-        "qwen":  {"host": "router.huggingface.co",     "ip": "3.163.189.74", "region": "US-East (Virginia)"},
-        "yolo":  {"host": "localhost (Visual YOLOv8)",  "ip": "127.0.0.1", "region": "Local GPU (RTX 4060)"},
-        "radio": {"host": "localhost (Radiographic YOLOv8)", "ip": "127.0.0.1", "region": "Local GPU (RTX 4060)"},
+        "yolo":  {"host": "localhost",                  "ip": "127.0.0.1", "region": "Local"},
+        "radio": {"host": "localhost",                  "ip": "127.0.0.1", "region": "Local"},
     }
     s = servers[model_key]
     return {"status": "success", "client_ip": client_ip, "username": username, "server_host": s["host"], "server_ip": s["ip"], "server_region": s["region"], "latency_ms": latency_ms, "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -393,7 +394,7 @@ async def test_traffic(model_key: str, request: Request):
 
 @app.post("/api/log-usage/{model_type}")
 async def log_usage(model_type: str, request: Request):
-    if model_type not in ["4cls", "yolo", "radio", "qwen"]:
+    if model_type not in ["4cls", "yolo", "radio"]:
         raise HTTPException(status_code=400, detail="Invalid model type")
     await log_model_usage(request, model_type)
     return {"status": "success"}
@@ -661,7 +662,7 @@ async def get_chats(request: Request):
 
 @app.post("/api/chats")
 async def save_chat(chat: ChatSession, request: Request):
-    await log_model_usage(request, "qwen")
+    # Qwen chat logs removed
     await db.chats.replace_one({"id": chat.id}, chat.dict(), upsert=True)
     return {"status": "success"}
 
@@ -712,6 +713,119 @@ async def delete_inspection(inspection_id: float, request: Request):
         raise HTTPException(status_code=403, detail="Not authorized to delete this record")
     await db.inspections.delete_one({"id": inspection_id})
     return {"status": "success"}
+
+
+# ─── Retrain Dataset Collection ────────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATASET_DIR = os.path.join(BASE_DIR, "active_learning_dataset")
+IMAGES_DIR = os.path.join(DATASET_DIR, "images")
+LABELS_DIR = os.path.join(DATASET_DIR, "labels")
+
+class CorrectionLabel(BaseModel):
+    label: str
+    points: Optional[List[List[float]]] = None
+    xyxy: Optional[List[float]] = None
+
+class RetrainSaveRequest(BaseModel):
+    image_base64: str
+    filename: str
+    labels: List[CorrectionLabel]
+
+@app.post("/api/retrain/save")
+async def save_retrain_data(req: RetrainSaveRequest):
+    try:
+        # Clean and construct filenames
+        safe_filename = os.path.basename(req.filename)
+        name_part, ext_part = os.path.splitext(safe_filename)
+        if not ext_part.lower() in [".jpg", ".jpeg", ".png", ".webp"]:
+            ext_part = ".jpg"
+        
+        timestamp = int(time.time() * 1000)
+        unique_name = f"{name_part}_{timestamp}{ext_part}"
+        label_name = f"{name_part}_{timestamp}.txt"
+
+        # Decode base64 image
+        img_data_str = req.image_base64
+        if "," in img_data_str:
+            img_data_str = img_data_str.split(",")[1]
+        
+        img_bytes = base64.b64decode(img_data_str)
+
+        # Get image dimensions
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise HTTPException(status_code=400, detail="Invalid image base64 data")
+        
+        img_h, img_w = img.shape[:2]
+
+        # Ensure directories exist
+        os.makedirs(IMAGES_DIR, exist_ok=True)
+        os.makedirs(LABELS_DIR, exist_ok=True)
+
+        # Save image file
+        image_path = os.path.join(IMAGES_DIR, unique_name)
+        with open(image_path, "wb") as f:
+            f.write(img_bytes)
+
+        # Map to class IDs
+        CLASS_MAP = {
+            "porosity": 0,
+            "slag": 1,
+            "crack": 2,
+            "tungsten": 3,
+            "undercut": 4,
+            "lack_of_fusion": 5,
+            "lack_of_penetration": 6,
+            "spatter": 7,
+            "volumetric": 0,
+            "union": 5,
+            "surface": 4
+        }
+
+        # Save YOLO label file
+        label_path = os.path.join(LABELS_DIR, label_name)
+        with open(label_path, "w") as f_label:
+            for item in req.labels:
+                lbl_clean = item.label.lower().replace(" ", "_")
+                class_id = CLASS_MAP.get(lbl_clean, 0)
+
+                # If we have polygon points
+                if item.points and len(item.points) >= 3:
+                    norm_pts = []
+                    for pt in item.points:
+                        px = min(max(pt[0] / img_w, 0.0), 1.0)
+                        py = min(max(pt[1] / img_h, 0.0), 1.0)
+                        norm_pts.append(f"{px:.6f} {py:.6f}")
+                    pts_str = " ".join(norm_pts)
+                    f_label.write(f"{class_id} {pts_str}\n")
+                
+                # If we only have bounding box xyxy
+                elif item.xyxy and len(item.xyxy) == 4:
+                    x1, y1, x2, y2 = item.xyxy
+                    pts = [
+                        [x1, y1],
+                        [x2, y1],
+                        [x2, y2],
+                        [x1, y2]
+                    ]
+                    norm_pts = []
+                    for pt in pts:
+                        px = min(max(pt[0] / img_w, 0.0), 1.0)
+                        py = min(max(pt[1] / img_h, 0.0), 1.0)
+                        norm_pts.append(f"{px:.6f} {py:.6f}")
+                    pts_str = " ".join(norm_pts)
+                    f_label.write(f"{class_id} {pts_str}\n")
+
+        return {
+            "status": "success",
+            "message": f"Corrected image and labels saved for active learning retraining.",
+            "filename": unique_name,
+            "num_labels": len(req.labels)
+        }
+    except Exception as e:
+        print(f"[Retrain Save Error] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ─── Serve Static (Vite build) ─────────────────────────────────────────────────

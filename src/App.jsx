@@ -14,6 +14,17 @@ const DEFECT_STANDARDS = {
   'defect':     { std: 'ISO 5817 - General',                   desc: 'General weld anomaly detected. Manual review recommended per applicable inspection standard.' }
 };
 
+const RETRAIN_CLASSES = [
+  { id: "porosity", name: "Porosity", color: "#3b82f6", rgb: "59,130,246" },
+  { id: "slag", name: "Slag inclusion", color: "#10b981", rgb: "16,185,129" },
+  { id: "crack", name: "Crack", color: "#ef4444", rgb: "239,68,68" },
+  { id: "tungsten", name: "Tungsten inclusion", color: "#f59e0b", rgb: "245,158,11" },
+  { id: "undercut", name: "Undercut", color: "#8b5cf6", rgb: "139,92,246" },
+  { id: "lack_of_fusion", name: "Lack of fusion", color: "#ec4899", rgb: "236,72,153" },
+  { id: "lack_of_penetration", name: "Lack of penetration", color: "#14b8a6", rgb: "20,184,166" },
+  { id: "spatter", name: "Spatter", color: "#64748b", rgb: "100,116,139" }
+];
+
 const palette = [
   { rgb: "239, 68, 68", hex: "#ef4444" },   // Red
   { rgb: "59, 130, 246", hex: "#3b82f6" },  // Blue
@@ -1546,6 +1557,154 @@ function AppContent({
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [confThreshold, setConfThreshold] = useState(0.40); // Default NDT threshold 40%
 
+  // Correction Studio States & Refs
+  const [isRetrainStudioOpen, setIsRetrainStudioOpen] = useState(false);
+  const [retrainBoxes, setRetrainBoxes] = useState([]);
+  const [retrainIsDrawing, setRetrainIsDrawing] = useState(false);
+  const [retrainStartPos, setRetrainStartPos] = useState({ x: 0, y: 0 });
+  const [retrainCurrentPos, setRetrainCurrentPos] = useState({ x: 0, y: 0 });
+  const [retrainClass, setRetrainClass] = useState("porosity");
+  const [isSavingRetrain, setIsSavingRetrain] = useState(false);
+  const [retrainDrawMode, setRetrainDrawMode] = useState("box"); // 'box' or 'segment'
+  const [retrainPoints, setRetrainPoints] = useState([]); // Array of [x, y] for segment mode
+  const [retrainViewBox, setRetrainViewBox] = useState("0 0 640 480");
+  const retrainSvgRef = useRef(null);
+
+  const openRetrainStudio = () => {
+    setRetrainBoxes(filteredBoxes.map(box => ({ ...box, hidden: false })));
+    setRetrainClass("porosity");
+    setIsRetrainStudioOpen(true);
+  };
+
+  const handleRetrainMouseDown = (e) => {
+    const svg = retrainSvgRef.current;
+    if (!svg) return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
+    
+    setRetrainIsDrawing(true);
+    setRetrainStartPos({ x: svgP.x, y: svgP.y });
+    setRetrainCurrentPos({ x: svgP.x, y: svgP.y });
+    if (retrainDrawMode === 'segment') {
+      setRetrainPoints([[svgP.x, svgP.y]]);
+    }
+  };
+
+  const handleRetrainMouseMove = (e) => {
+    if (!retrainIsDrawing) return;
+    const svg = retrainSvgRef.current;
+    if (!svg) return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
+    
+    setRetrainCurrentPos({ x: svgP.x, y: svgP.y });
+    if (retrainDrawMode === 'segment') {
+      setRetrainPoints(pts => [...pts, [svgP.x, svgP.y]]);
+    }
+  };
+
+  const handleRetrainMouseUp = () => {
+    if (!retrainIsDrawing) return;
+    setRetrainIsDrawing(false);
+    
+    if (retrainDrawMode === "segment") {
+      if (retrainPoints.length >= 3) {
+        const xs = retrainPoints.map(p => p[0]);
+        const ys = retrainPoints.map(p => p[1]);
+        const x1 = Math.min(...xs);
+        const y1 = Math.min(...ys);
+        const x2 = Math.max(...xs);
+        const y2 = Math.max(...ys);
+        
+        const newBox = {
+          type: "mask",
+          label: retrainClass,
+          confidence: 1.0,
+          points: retrainPoints,
+          xyxy: [x1, y1, x2, y2],
+          hidden: false
+        };
+        setRetrainBoxes(prev => [...prev, newBox]);
+      }
+      setRetrainPoints([]);
+    } else {
+      const x1 = Math.min(retrainStartPos.x, retrainCurrentPos.x);
+      const y1 = Math.min(retrainStartPos.y, retrainCurrentPos.y);
+      const x2 = Math.max(retrainStartPos.x, retrainCurrentPos.x);
+      const y2 = Math.max(retrainStartPos.y, retrainCurrentPos.y);
+      
+      const w = x2 - x1;
+      const h = y2 - y1;
+      
+      if (w > 5 && h > 5) {
+        const newBox = {
+          type: "box",
+          label: retrainClass,
+          confidence: 1.0,
+          xyxy: [x1, y1, x2, y2],
+          hidden: false
+        };
+        setRetrainBoxes(prev => [...prev, newBox]);
+      }
+    }
+  };
+
+  const deleteRetrainBox = (idxToDelete) => {
+    setRetrainBoxes(prev => prev.filter((_, idx) => idx !== idxToDelete));
+  };
+
+  const toggleHideRetrainBox = (idxToToggle) => {
+    setRetrainBoxes(prev => prev.map((box, idx) => 
+      idx === idxToToggle ? { ...box, hidden: !box.hidden } : box
+    ));
+  };
+
+  const saveRetrainData = async () => {
+    setIsSavingRetrain(true);
+    try {
+      const payload = {
+        image_base64: imagePreview,
+        filename: imageFile ? imageFile.name : "corrected_image.jpg",
+        labels: retrainBoxes.map(box => ({
+          label: box.label,
+          xyxy: box.xyxy,
+          points: box.points
+        }))
+      };
+      
+      const res = await fetch(`${API_URL}/api/retrain/save`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': userId || 'Anonymous',
+          'x-user-role': userRole || 'Inspector'
+        },
+        body: JSON.stringify(payload)
+      });
+      
+      if (res.ok) {
+        alert("Retraining data saved successfully!");
+        setIsRetrainStudioOpen(false);
+      } else {
+        alert("Failed to save retraining data.");
+      }
+    } catch (err) {
+      console.error("Error saving retraining data:", err);
+      alert("Error saving retraining data.");
+    } finally {
+      setIsSavingRetrain(false);
+    }
+  };
+
+  const handleRetrainImageLoad = (e) => {
+    const { naturalWidth, naturalHeight } = e.target;
+    setRetrainViewBox(`0 0 ${naturalWidth} ${naturalHeight}`);
+  };
+
   // Dynamic real-time filter for active scan and report PDF preview
   const filteredDetections = (detections || []).filter(d => (d.confidence ?? 1.0) >= confThreshold);
   const filteredBoxes = filteredDetections.filter(d => d.type === 'box');
@@ -2375,6 +2534,19 @@ function AppContent({
                   })
                 )}
               </div>
+
+              {detections.length > 0 && (
+                <button
+                  type="button"
+                  onClick={openRetrainStudio}
+                  className="w-full mt-4 py-3 bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-xl font-black text-[10px] uppercase tracking-[0.2em] shadow-lg shadow-red-500/5 flex items-center justify-center gap-2 transition-all duration-300 active:scale-95 flex-shrink-0"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
+                  Correct Defects
+                </button>
+              )}
 
               {/* Inspector Decision Workflow */}
               {currentInspectionId && (
@@ -3295,6 +3467,290 @@ function AppContent({
                 </button>
               </div>
             </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Correction & Retraining Studio Modal */}
+      <AnimatePresence>
+        {isRetrainStudioOpen && (
+          <div className="fixed inset-0 z-[250] flex items-center justify-center p-4 sm:p-6 bg-slate-950/95 backdrop-blur-md">
+            <div className="w-full max-w-7xl h-[90vh] bg-slate-900 border border-white/10 rounded-2xl flex flex-col overflow-hidden shadow-2xl shadow-black/80">
+              
+              {/* Header */}
+              <div className="flex-shrink-0 flex items-center justify-between p-6 border-b border-white/10 bg-slate-950/40">
+                <div className="flex items-center gap-3">
+                  <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
+                  <h2 className="text-sm font-bold text-white uppercase tracking-wider">Correction & Retraining Studio</h2>
+                  <span className="text-[10px] font-black font-mono bg-white/10 text-slate-300 px-2 py-0.5 rounded-md border border-white/5">
+                    {retrainBoxes.length} {retrainBoxes.length === 1 ? 'LABEL' : 'LABELS'}
+                  </span>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setIsRetrainStudioOpen(false)}
+                  className="p-1 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-white transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Workspace */}
+              <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-6 p-6">
+                
+                {/* Image & Canvas Section */}
+                <div className="lg:col-span-8 h-full flex items-center justify-center relative bg-black/60 rounded-xl border border-white/5 overflow-hidden select-none">
+                  {imagePreview && (
+                    <div className="relative w-full h-full flex items-center justify-center">
+                      <img 
+                        src={imagePreview} 
+                        onLoad={handleRetrainImageLoad}
+                        className="max-w-full max-h-full object-contain pointer-events-none"
+                        alt="Retrain Source" 
+                      />
+                      <svg 
+                        ref={retrainSvgRef}
+                        viewBox={retrainViewBox}
+                        preserveAspectRatio="xMidYMid meet"
+                        onMouseDown={handleRetrainMouseDown}
+                        onMouseMove={handleRetrainMouseMove}
+                        onMouseUp={handleRetrainMouseUp}
+                        className="absolute inset-0 w-full h-full cursor-crosshair"
+                      >
+                        {/* Render drawn labels */}
+                        {retrainBoxes.map((box, idx) => {
+                          if (box.hidden) return null;
+                          const colorClass = RETRAIN_CLASSES.find(c => c.id === box.label) || { color: "#ef4444", rgb: "239,68,68" };
+                          
+                          if (box.type === "mask" && box.points) {
+                            return (
+                              <g key={`retrain-box-${idx}`}>
+                                <polygon
+                                  points={box.points.map(pt => pt.join(',')).join(' ')}
+                                  fill={`rgba(${colorClass.rgb}, 0.25)`}
+                                  stroke={colorClass.color}
+                                  strokeWidth="2"
+                                />
+                                {box.xyxy && (
+                                  <>
+                                    <rect
+                                      x={box.xyxy[0]}
+                                      y={Math.max(0, box.xyxy[1] - 15)}
+                                      width={box.label.length * 6 + 12}
+                                      height={15}
+                                      fill={colorClass.color}
+                                      rx="2"
+                                    />
+                                    <text
+                                      x={box.xyxy[0] + 4}
+                                      y={Math.max(0, box.xyxy[1] - 15) + 11}
+                                      fill="white"
+                                      fontSize="9"
+                                      fontWeight="bold"
+                                      className="capitalize font-mono"
+                                    >
+                                      {box.label.replace('_', ' ')}
+                                    </text>
+                                  </>
+                                )}
+                              </g>
+                            );
+                          } else if (box.xyxy) {
+                            const [x1, y1, x2, y2] = box.xyxy;
+                            const w = x2 - x1;
+                            const h = y2 - y1;
+                            return (
+                              <g key={`retrain-box-${idx}`}>
+                                <rect
+                                  x={x1}
+                                  y={y1}
+                                  width={w}
+                                  height={h}
+                                  fill={`rgba(${colorClass.rgb}, 0.25)`}
+                                  stroke={colorClass.color}
+                                  strokeWidth="2"
+                                />
+                                <rect
+                                  x={x1}
+                                  y={Math.max(0, y1 - 15)}
+                                  width={box.label.length * 6 + 12}
+                                  height={15}
+                                  fill={colorClass.color}
+                                  rx="2"
+                                />
+                                <text
+                                  x={x1 + 4}
+                                  y={Math.max(0, y1 - 15) + 11}
+                                  fill="white"
+                                  fontSize="9"
+                                  fontWeight="bold"
+                                  className="capitalize font-mono"
+                                >
+                                  {box.label.replace('_', ' ')}
+                                </text>
+                              </g>
+                            );
+                          }
+                          return null;
+                        })}
+
+                        {/* Dragging preview */}
+                        {retrainIsDrawing && retrainDrawMode === 'box' && (
+                          <rect
+                            x={Math.min(retrainStartPos.x, retrainCurrentPos.x)}
+                            y={Math.min(retrainStartPos.y, retrainCurrentPos.y)}
+                            width={Math.abs(retrainCurrentPos.x - retrainStartPos.x)}
+                            height={Math.abs(retrainCurrentPos.y - retrainStartPos.y)}
+                            fill="rgba(6, 182, 212, 0.15)"
+                            stroke="#06b6d4"
+                            strokeWidth="2"
+                            strokeDasharray="4 4"
+                          />
+                        )}
+
+                        {retrainIsDrawing && retrainDrawMode === 'segment' && retrainPoints.length > 0 && (
+                          <polygon
+                            points={retrainPoints.map(pt => pt.join(',')).join(' ')}
+                            fill="rgba(6, 182, 212, 0.15)"
+                            stroke="#06b6d4"
+                            strokeWidth="2"
+                            strokeDasharray="4 4"
+                          />
+                        )}
+                      </svg>
+                    </div>
+                  )}
+                </div>
+
+                {/* Sidebar controls & active labels list */}
+                <div className="lg:col-span-4 h-full flex flex-col overflow-hidden bg-slate-900/60 border border-white/5 rounded-xl">
+                  
+                  {/* Tool Options */}
+                  <div className="p-4 border-b border-white/10 space-y-4 flex-shrink-0">
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Drawing Tool Mode</h3>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setRetrainDrawMode('box')}
+                          className={`py-2 px-3 rounded-lg text-xs font-bold transition-all border ${retrainDrawMode === 'box' ? 'bg-red-500/10 border-red-500 text-red-400 shadow-md' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}
+                        >
+                          Bounding Box
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRetrainDrawMode('segment')}
+                          className={`py-2 px-3 rounded-lg text-xs font-bold transition-all border ${retrainDrawMode === 'segment' ? 'bg-red-500/10 border-red-500 text-red-400 shadow-md' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}
+                        >
+                          Segmentation Mask
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Defect Category</h3>
+                      <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                        {RETRAIN_CLASSES.map(cls => (
+                          <button
+                            key={cls.id}
+                            type="button"
+                            onClick={() => setRetrainClass(cls.id)}
+                            className={`py-1.5 px-2.5 rounded-lg text-[10px] font-bold text-left transition-all border flex items-center gap-2 ${retrainClass === cls.id ? 'bg-white/10 border-white/30 text-white' : 'bg-white/5 border-white/5 text-slate-400 hover:bg-white/10'}`}
+                          >
+                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cls.color }} />
+                            <span className="truncate">{cls.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Active Labels List */}
+                  <div className="flex-1 overflow-y-auto p-4 min-h-0 flex flex-col">
+                    <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 flex-shrink-0">Active Labels ({retrainBoxes.length})</h3>
+                    <div className="space-y-2 flex-1 overflow-y-auto pr-1">
+                      {retrainBoxes.map((box, idx) => {
+                        const colorClass = RETRAIN_CLASSES.find(c => c.id === box.label) || { color: "#ef4444", name: box.label };
+                        return (
+                          <div 
+                            key={idx}
+                            className={`flex items-center justify-between p-3 rounded-xl border transition-all ${box.hidden ? 'bg-white/2 border-white/5 opacity-50' : 'bg-white/5 border-white/10 hover:border-white/25'}`}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: colorClass.color }} />
+                              <div className="truncate">
+                                <div className="text-xs font-bold text-white capitalize truncate">{colorClass.name.replace('_', ' ')}</div>
+                                <div className="text-[8px] font-bold text-slate-500 uppercase tracking-wider">{box.type === 'mask' ? 'segmentation' : 'bounding box'}</div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => toggleHideRetrainBox(idx)}
+                                className={`p-1.5 rounded-lg transition-colors border ${box.hidden ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'}`}
+                              >
+                                {box.hidden ? (
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858-.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" />
+                                  </svg>
+                                ) : (
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                  </svg>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteRetrainBox(idx)}
+                                className="p-1.5 rounded-lg bg-white/5 border border-white/10 hover:border-red-500/30 text-slate-400 hover:text-red-400 transition-colors"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-4v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {retrainBoxes.length === 0 && (
+                        <div className="text-center py-8 text-xs text-slate-500 italic">No labels created yet. Draw on the image to add labels.</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Actions Footer */}
+                  <div className="p-4 border-t border-white/10 bg-slate-950/40 space-y-2 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={saveRetrainData}
+                      disabled={isSavingRetrain}
+                      className="btn-gradient w-full py-3 rounded-lg font-bold text-sm text-center flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isSavingRetrain ? (
+                        <>
+                          <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                          Saving Dataset...
+                        </>
+                      ) : (
+                        "Save to Retraining Dataset"
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsRetrainStudioOpen(false)}
+                      className="w-full py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-slate-400 hover:text-white font-medium text-xs tracking-wider uppercase transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+
+            </div>
           </div>
         )}
       </AnimatePresence>
