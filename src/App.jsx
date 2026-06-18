@@ -1688,6 +1688,53 @@ function AppContent({
     ));
   };
 
+  const closeRetrainStudioWithSync = () => {
+    const newDetections = [];
+    retrainBoxes.forEach(item => {
+      if (item.hidden) return;
+      
+      if (item.type === 'mask') {
+        newDetections.push({
+          ...item,
+          confidence: item.confidence ?? 1.0
+        });
+        
+        if (item.xyxy) {
+          newDetections.push({
+            type: 'box',
+            label: item.label,
+            confidence: item.confidence ?? 1.0,
+            xyxy: item.xyxy
+          });
+        }
+      } else {
+        newDetections.push({
+          ...item,
+          confidence: item.confidence ?? 1.0
+        });
+        
+        if (isVisualInspection && item.xyxy) {
+          const [x1, y1, x2, y2] = item.xyxy;
+          const points = [
+            [x1, y1],
+            [x2, y1],
+            [x2, y2],
+            [x1, y2]
+          ];
+          newDetections.push({
+            type: 'mask',
+            label: item.label,
+            confidence: item.confidence ?? 1.0,
+            points: points,
+            xyxy: item.xyxy
+          });
+        }
+      }
+    });
+    setDetections(newDetections);
+    setIsRetrainStudioOpen(false);
+  };
+
   const saveRetrainData = async () => {
     setIsSavingRetrain(true);
     try {
@@ -1713,7 +1760,7 @@ function AppContent({
       
       if (res.ok) {
         alert("Retraining data saved successfully!");
-        setIsRetrainStudioOpen(false);
+        closeRetrainStudioWithSync();
       } else {
         alert("Failed to save retraining data.");
       }
@@ -3676,7 +3723,7 @@ function AppContent({
                 </div>
                 <button 
                   type="button"
-                  onClick={() => setIsRetrainStudioOpen(false)}
+                  onClick={closeRetrainStudioWithSync}
                   className="p-1.5 rounded-lg bg-slate-100 border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3928,7 +3975,7 @@ function AppContent({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setIsRetrainStudioOpen(false)}
+                      onClick={closeRetrainStudioWithSync}
                       className="w-full py-3 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-500 hover:text-slate-800 font-bold text-xs tracking-wider uppercase transition-all shadow-sm"
                     >
                       Cancel
