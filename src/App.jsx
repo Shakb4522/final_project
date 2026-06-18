@@ -713,6 +713,8 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisModel, setAnalysisModel] = useState('Auto-Detect');
+  const [rtModelClass, setRtModelClass] = useState('4cls');
+  const [vtModelClass, setVtModelClass] = useState('4cls');
 
   // Chat History State
   const [chats, setChats] = useState(() => {
@@ -964,15 +966,18 @@ export default function App() {
     setDetections([]);
 
     try {
-      // ── Local WeldSight-4CLS inference via /api/analyze ──────────────────
+      // ── WeldSight inference via /api/analyze with model_type & inspection_type ──
       const formData = new FormData();
       formData.append("file", imageFile);
 
-      const res = await fetch(`${API_URL}/api/analyze`, {
+      // Map UI selection to API query params
+      const inspectionTypeParam = analysisModel === 'Visual (Photo)' ? 'visual' : analysisModel === 'Radiographic (X-Ray)' ? 'radio' : 'auto';
+      const modelTypeParam = analysisModel === 'Visual (Photo)' ? (vtModelClass || '4cls') : (rtModelClass || '4cls');
+
+      const res = await fetch(`${API_URL}/api/analyze?model_type=${modelTypeParam}&inspection_type=${inspectionTypeParam}`, {
         method: "POST",
         headers: { 
-          "x-user-id": userId || "Anonymous",
-          "x-model-choice": analysisModel
+          "x-user-id": userId || "Anonymous"
         },
         body: formData,
       });
@@ -1525,7 +1530,7 @@ export default function App() {
           showChat, setShowChat, isMobileMenuOpen, setIsMobileMenuOpen, imgRef, handleImageLoad, viewBox,
           getColorForLabel, triggerAISummary, generatePDFReport, sendMessage, DEFECT_STANDARDS, API_URL, isProcessing,
           yoloLatency, radioLatency, qwenLatency, yoloHistory, radioHistory, qwenHistory, showAnnotations, setShowAnnotations, imageFile, setImageFile, runAnalysis, handleImageSelect, focusOnDefect, masks, boxes,
-          analysisModel, setAnalysisModel,
+          analysisModel, setAnalysisModel, rtModelClass, setRtModelClass, vtModelClass, setVtModelClass,
           isTrafficModalOpen, setIsTrafficModalOpen, selectedTraffic, setSelectedTraffic, chats, setChats, currentChatId, setCurrentChatId, showHistoryList, setShowHistoryList, 
           chatInput, setChatInput, typingChatId, setTypingChatId, stopTypingRef, chatEndRef, chatContainerRef, isAtBottomRef, currentChat, handleChatScroll, startNewChat, deleteChat, handleDecision,
           isRegisterMode, setIsRegisterMode, handleRegister,
@@ -1545,7 +1550,7 @@ function AppContent({
   showChat, setShowChat, isMobileMenuOpen, setIsMobileMenuOpen, imgRef, handleImageLoad, viewBox,
   getColorForLabel, triggerAISummary, generatePDFReport, sendMessage, DEFECT_STANDARDS, API_URL, isProcessing,
   yoloLatency, radioLatency, qwenLatency, yoloHistory, radioHistory, qwenHistory, showAnnotations, setShowAnnotations, imageFile, setImageFile, runAnalysis, handleImageSelect, focusOnDefect, masks, boxes,
-  analysisModel, setAnalysisModel,
+  analysisModel, setAnalysisModel, rtModelClass, setRtModelClass, vtModelClass, setVtModelClass,
   isTrafficModalOpen, setIsTrafficModalOpen, selectedTraffic, setSelectedTraffic, chats, setChats, currentChatId, setCurrentChatId, showHistoryList, setShowHistoryList, 
   chatInput, setChatInput, typingChatId, setTypingChatId, stopTypingRef, chatEndRef, chatContainerRef, isAtBottomRef, currentChat, handleChatScroll, startNewChat, deleteChat, handleDecision,
   isRegisterMode, setIsRegisterMode, handleRegister,
@@ -2218,7 +2223,7 @@ function AppContent({
               </p>
             </motion.div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               {/* Controls */}
               <div className="lg:col-span-3 flex flex-col gap-6">
                 <div className="glass-card p-5">
@@ -2305,18 +2310,110 @@ function AppContent({
                 </div>
 
                 <div className="glass-card p-5">
-                  <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">2. Model Selection</h3>
+                  <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">2. Inspection Type</h3>
                   <div className="grid grid-cols-1 gap-2">
                     {['Auto-Detect', 'Visual (Photo)', 'Radiographic (X-Ray)'].map(m => (
                       <button 
                         key={m}
                         onClick={() => setAnalysisModel(m)}
-                        className={`w-full py-2 px-3 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all border ${analysisModel === m ? 'bg-red-500/10 border-red-500 text-red-400 shadow-lg shadow-red-500/10' : 'bg-white/5 border-white/10 text-slate-500 hover:border-white/20'}`}
+                        className={`w-full py-2 px-3 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all border ${analysisModel === m ? 'bg-red-600 border-red-600 text-white shadow-md shadow-red-600/10' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'}`}
                       >
                         {m}
                       </button>
                     ))}
                   </div>
+
+                  {/* Sub-model class selection */}
+                  {analysisModel === 'Radiographic (X-Ray)' && (
+                    <div className="mt-4 pt-4 border-t border-slate-100">
+                      <h4 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">RT Model Class</h4>
+                      <div className="grid grid-cols-1 gap-1.5">
+                        {[
+                          { id: 'binary', label: 'Binary (Defect / No Defect)' },
+                          { id: '4cls', label: '4-Class Detection' },
+                          { id: '7cls', label: '7-Class Elite' }
+                        ].map(mc => (
+                          <button
+                            key={mc.id}
+                            onClick={() => setRtModelClass(mc.id)}
+                            className={`w-full py-2 px-3 rounded-lg text-[10px] font-bold transition-all border flex items-center gap-2 ${rtModelClass === mc.id ? 'bg-emerald-50 border-emerald-400 text-emerald-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'}`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${rtModelClass === mc.id ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                            {mc.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {analysisModel === 'Visual (Photo)' && (
+                    <div className="mt-4 pt-4 border-t border-slate-100">
+                      <h4 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">VT Model Class</h4>
+                      <div className="grid grid-cols-1 gap-1.5">
+                        {[
+                          { id: 'binary', label: 'Binary (Defect / No Defect)' },
+                          { id: '4cls', label: '6-Class Detection' }
+                        ].map(mc => (
+                          <button
+                            key={mc.id}
+                            onClick={() => setVtModelClass(mc.id)}
+                            className={`w-full py-2 px-3 rounded-lg text-[10px] font-bold transition-all border flex items-center gap-2 ${vtModelClass === mc.id ? 'bg-emerald-50 border-emerald-400 text-emerald-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'}`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${vtModelClass === mc.id ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                            {mc.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {analysisModel === 'Auto-Detect' && (
+                    <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
+                      <div>
+                        <h4 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                          If Radiographic Detected
+                        </h4>
+                        <div className="grid grid-cols-1 gap-1.5">
+                          {[
+                            { id: 'binary', label: 'Binary (Defect / No Defect)' },
+                            { id: '4cls', label: '4-Class Detection' },
+                            { id: '7cls', label: '7-Class Elite' }
+                          ].map(mc => (
+                            <button
+                              key={`rt-${mc.id}`}
+                              onClick={() => setRtModelClass(mc.id)}
+                              className={`w-full py-1.5 px-3 rounded-lg text-[10px] font-bold transition-all border flex items-center gap-2 ${rtModelClass === mc.id ? 'bg-emerald-50 border-emerald-400 text-emerald-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'}`}
+                            >
+                              <span className={`w-1.5 h-1.5 rounded-full ${rtModelClass === mc.id ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                              {mc.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <h4 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-cyan-500" />
+                          If Visual Detected
+                        </h4>
+                        <div className="grid grid-cols-1 gap-1.5">
+                          {[
+                            { id: 'binary', label: 'Binary (Defect / No Defect)' },
+                            { id: '4cls', label: '6-Class Detection' }
+                          ].map(mc => (
+                            <button
+                              key={`vt-${mc.id}`}
+                              onClick={() => setVtModelClass(mc.id)}
+                              className={`w-full py-1.5 px-3 rounded-lg text-[10px] font-bold transition-all border flex items-center gap-2 ${vtModelClass === mc.id ? 'bg-emerald-50 border-emerald-400 text-emerald-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'}`}
+                            >
+                              <span className={`w-1.5 h-1.5 rounded-full ${vtModelClass === mc.id ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                              {mc.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="glass-card p-5">
@@ -2372,7 +2469,7 @@ function AppContent({
 
               {/* Viewer */}
           <div className="lg:col-span-6 flex flex-col">
-            <div className="glass-card p-2 flex-1 flex items-center justify-center relative min-h-[400px]">
+            <div className="glass-card p-2 flex items-center justify-center relative" style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}>
               
               {isProcessing && (
                 <div className="absolute inset-0 bg-dark-900/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center rounded-xl">
@@ -2388,7 +2485,7 @@ function AppContent({
                   <p className="text-xs mt-1">Upload an image to view it here</p>
                 </div>
               ) : (
-                <div className="relative w-full h-[65vh] flex items-center justify-center overflow-hidden rounded-xl bg-black">
+                <div className="relative w-full h-full flex items-center justify-center overflow-hidden rounded-xl bg-black">
                   <img ref={imgRef} src={imagePreview} onLoad={handleImageLoad} className="absolute inset-0 w-full h-full object-contain" alt="Inspection" />
                   
                   {showAnnotations && viewBox && (
