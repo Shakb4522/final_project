@@ -2022,6 +2022,7 @@ function AppContent({
                     location.pathname.startsWith('/analytics') ? 'Analytics' :
                     location.pathname.startsWith('/audit') ? 'Audit' :
                     location.pathname.startsWith('/users') ? 'Users' :
+                    location.pathname.startsWith('/retrain-dataset') ? 'Retrain Dataset' :
                     location.pathname.startsWith('/report') ? 'Report' : 'Dashboard';
 
   const setActiveTab = (tab) => {
