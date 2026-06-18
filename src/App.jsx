@@ -22,7 +22,15 @@ const RETRAIN_CLASSES = [
   { id: "undercut", name: "Undercut", color: "#8b5cf6", rgb: "139,92,246" },
   { id: "lack_of_fusion", name: "Lack of fusion", color: "#ec4899", rgb: "236,72,153" },
   { id: "lack_of_penetration", name: "Lack of penetration", color: "#14b8a6", rgb: "20,184,166" },
-  { id: "spatter", name: "Spatter", color: "#64748b", rgb: "100,116,139" }
+  { id: "spatter", name: "Spatter", color: "#64748b", rgb: "100,116,139" },
+  { id: "defect", name: "Defect", color: "#ef4444", rgb: "239,68,68" },
+  { id: "good_weld", name: "Good Weld", color: "#10b981", rgb: "16,185,129" },
+  { id: "bad_weld", name: "Bad Weld", color: "#f59e0b", rgb: "245,158,11" },
+  { id: "volumetric", name: "Volumetric", color: "#3b82f6", rgb: "59,130,246" },
+  { id: "union", name: "Union", color: "#f59e0b", rgb: "245,158,11" },
+  { id: "surface", name: "Surface", color: "#8b5cf6", rgb: "139,92,246" },
+  { id: "lack_of_union", name: "Lack of Union", color: "#f59e0b", rgb: "245,158,11" },
+  { id: "inclusion", name: "Inclusion", color: "#ec4899", rgb: "236,72,153" }
 ];
 
 const palette = [
@@ -1580,7 +1588,15 @@ function AppContent({
   const openRetrainStudio = () => {
     const sourceDetections = isVisualInspection ? filteredMasks : filteredBoxes;
     setRetrainBoxes(sourceDetections.map(det => ({ ...det, hidden: false })));
-    setRetrainClass("porosity");
+    
+    // Set default class based on the chosen model's classes
+    const activeClasses = getRetrainClasses();
+    if (activeClasses && activeClasses.length > 0) {
+      setRetrainClass(activeClasses[0].id);
+    } else {
+      setRetrainClass("porosity");
+    }
+    
     setRetrainDrawMode(isVisualInspection ? "segment" : "box");
     setIsRetrainStudioOpen(true);
   };
@@ -1723,6 +1739,54 @@ function AppContent({
       currentModelUsed.toLowerCase().includes('visual') || 
       currentModelUsed.toLowerCase().includes('vt')
     ));
+
+  const getRetrainClasses = () => {
+    if (isVisualInspection) {
+      if (vtModelClass === 'binary') {
+        return [
+          { id: "defect", name: "Defect", color: "#ef4444", rgb: "239,68,68" },
+          { id: "good_weld", name: "Good Weld", color: "#10b981", rgb: "16,185,129" }
+        ];
+      } else {
+        // VT 6-class (crack, good weld, bad weld, porosity, slag, undercut)
+        return [
+          { id: "crack", name: "Crack", color: "#ef4444", rgb: "239,68,68" },
+          { id: "good_weld", name: "Good Weld", color: "#10b981", rgb: "16,185,129" },
+          { id: "bad_weld", name: "Bad Weld", color: "#f59e0b", rgb: "245,158,11" },
+          { id: "porosity", name: "Porosity", color: "#3b82f6", rgb: "59,130,246" },
+          { id: "slag", name: "Slag", color: "#8b5cf6", rgb: "139,92,246" },
+          { id: "undercut", name: "Undercut", color: "#ec4899", rgb: "236,72,153" }
+        ];
+      }
+    } else {
+      // Radiographic (RT)
+      if (rtModelClass === 'binary') {
+        return [
+          { id: "defect", name: "Defect", color: "#ef4444", rgb: "239,68,68" },
+          { id: "good_weld", name: "Good Weld", color: "#10b981", rgb: "16,185,129" }
+        ];
+      } else if (rtModelClass === '4cls') {
+        return [
+          { id: "crack", name: "Crack", color: "#ef4444", rgb: "239,68,68" },
+          { id: "volumetric", name: "Volumetric", color: "#3b82f6", rgb: "59,130,246" },
+          { id: "union", name: "Union", color: "#f59e0b", rgb: "245,158,11" },
+          { id: "surface", name: "Surface", color: "#8b5cf6", rgb: "139,92,246" }
+        ];
+      } else {
+        // 7-class
+        return [
+          { id: "crack", name: "Crack", color: "#ef4444", rgb: "239,68,68" },
+          { id: "porosity", name: "Porosity", color: "#3b82f6", rgb: "59,130,246" },
+          { id: "lack_of_union", name: "Lack of Union", color: "#f59e0b", rgb: "245,158,11" },
+          { id: "slag", name: "Slag inclusion", color: "#10b981", rgb: "16,185,129" },
+          { id: "undercut", name: "Undercut", color: "#8b5cf6", rgb: "139,92,246" },
+          { id: "inclusion", name: "Inclusion", color: "#ec4899", rgb: "236,72,153" },
+          { id: "spatter", name: "Spatter", color: "#64748b", rgb: "100,116,139" },
+          { id: "defect", name: "Defect", color: "#ef4444", rgb: "239,68,68" }
+        ];
+      }
+    }
+  };
 
   // Map path to tab name for active styling
   const activeTab = location.pathname === '/' ? 'Dashboard' : 
@@ -3776,7 +3840,7 @@ function AppContent({
                     <div>
                       <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Defect Category</h3>
                       <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
-                        {RETRAIN_CLASSES.map(cls => (
+                        {getRetrainClasses().map(cls => (
                           <button
                             key={cls.id}
                             type="button"
