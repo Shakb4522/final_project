@@ -2311,26 +2311,20 @@ function AppContent({
 
                 <div className="glass-card p-5">
                   <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">2. Inspection Type</h3>
-                  <div className="space-y-2.5">
+                  <div className="grid grid-cols-3 gap-1.5">
                     {[
-                      { id: 'Auto-Detect', label: 'Auto-Detect', desc: 'AI-driven automatic classification', icon: '⚡' },
-                      { id: 'Visual (Photo)', label: 'Visual (Photo)', desc: 'Surface weld VT camera scan', icon: '📷' },
-                      { id: 'Radiographic (X-Ray)', label: 'Radiographic (X-Ray)', desc: 'X-Ray weld RT sensor scan', icon: '☢️' }
+                      { id: 'Auto-Detect', label: 'Auto' },
+                      { id: 'Visual (Photo)', label: 'Visual' },
+                      { id: 'Radiographic (X-Ray)', label: 'Radio' }
                     ].map(m => {
                       const isActive = analysisModel === m.id;
                       return (
                         <button 
                           key={m.id}
                           onClick={() => setAnalysisModel(m.id)}
-                          className={`w-full p-3 rounded-xl border text-left transition-all duration-200 flex items-center gap-3 ${isActive ? 'bg-red-50 border-red-500/30 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-350 hover:bg-slate-50/50'}`}
+                          className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-black uppercase tracking-wider ${isActive ? 'bg-red-600 border-red-600 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
                         >
-                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm transition-colors flex-shrink-0 ${isActive ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                            {m.icon}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className={`text-xs font-bold ${isActive ? 'text-red-700' : 'text-slate-800'}`}>{m.label}</div>
-                            <div className="text-[10px] text-slate-400 mt-0.5 truncate">{m.desc}</div>
-                          </div>
+                          {m.label}
                         </button>
                       );
                     })}
@@ -2340,23 +2334,20 @@ function AppContent({
                   {analysisModel === 'Radiographic (X-Ray)' && (
                     <div className="mt-4 pt-4 border-t border-slate-100">
                       <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">RT Model Class</h4>
-                      <div className="grid grid-cols-1 gap-2">
+                      <div className="grid grid-cols-3 gap-1.5">
                         {[
-                          { id: 'binary', label: 'Binary (Defect / No Defect)' },
-                          { id: '4cls', label: '4-Class Detection' },
-                          { id: '7cls', label: '7-Class Elite' }
+                          { id: 'binary', label: 'Binary' },
+                          { id: '4cls', label: '4-Class' },
+                          { id: '7cls', label: '7-Class' }
                         ].map(mc => {
                           const isSel = rtModelClass === mc.id;
                           return (
                             <button
                               key={mc.id}
                               onClick={() => setRtModelClass(mc.id)}
-                              className={`w-full py-2.5 px-3.5 rounded-xl border text-left transition-all duration-200 flex items-center gap-3 ${isSel ? 'bg-emerald-50/50 border-emerald-400 text-emerald-800 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
+                              className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-bold uppercase tracking-wider ${isSel ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
                             >
-                              <div className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 transition-colors ${isSel ? 'border-emerald-500 bg-emerald-500' : 'border-slate-300 bg-slate-50'}`}>
-                                {isSel && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                              </div>
-                              <span className="text-xs font-semibold">{mc.label}</span>
+                              {mc.label}
                             </button>
                           );
                         })}
@@ -2367,22 +2358,19 @@ function AppContent({
                   {analysisModel === 'Visual (Photo)' && (
                     <div className="mt-4 pt-4 border-t border-slate-100">
                       <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">VT Model Class</h4>
-                      <div className="grid grid-cols-1 gap-2">
+                      <div className="grid grid-cols-2 gap-1.5">
                         {[
-                          { id: 'binary', label: 'Binary (Defect / No Defect)' },
-                          { id: '4cls', label: '6-Class Detection' }
+                          { id: 'binary', label: 'Binary' },
+                          { id: '4cls', label: '6-Class' }
                         ].map(mc => {
                           const isSel = vtModelClass === mc.id;
                           return (
                             <button
                               key={mc.id}
                               onClick={() => setVtModelClass(mc.id)}
-                              className={`w-full py-2.5 px-3.5 rounded-xl border text-left transition-all duration-200 flex items-center gap-3 ${isSel ? 'bg-emerald-50/50 border-emerald-400 text-emerald-800 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
+                              className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-bold uppercase tracking-wider ${isSel ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
                             >
-                              <div className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 transition-colors ${isSel ? 'border-emerald-500 bg-emerald-500' : 'border-slate-300 bg-slate-50'}`}>
-                                {isSel && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                              </div>
-                              <span className="text-xs font-semibold">{mc.label}</span>
+                              {mc.label}
                             </button>
                           );
                         })}
@@ -2397,23 +2385,20 @@ function AppContent({
                           <span className="w-2 h-2 rounded-full bg-amber-500" />
                           If Radiographic Detected
                         </h4>
-                        <div className="grid grid-cols-1 gap-2">
+                        <div className="grid grid-cols-3 gap-1.5">
                           {[
-                            { id: 'binary', label: 'Binary (Defect / No Defect)' },
-                            { id: '4cls', label: '4-Class Detection' },
-                            { id: '7cls', label: '7-Class Elite' }
+                            { id: 'binary', label: 'Binary' },
+                            { id: '4cls', label: '4-Class' },
+                            { id: '7cls', label: '7-Class' }
                           ].map(mc => {
                             const isSel = rtModelClass === mc.id;
                             return (
                               <button
                                 key={`rt-${mc.id}`}
                                 onClick={() => setRtModelClass(mc.id)}
-                                className={`w-full py-2.5 px-3.5 rounded-xl border text-left transition-all duration-200 flex items-center gap-3 ${isSel ? 'bg-emerald-50/50 border-emerald-400 text-emerald-800 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
+                                className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-bold uppercase tracking-wider ${isSel ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
                               >
-                                <div className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 transition-colors ${isSel ? 'border-emerald-500 bg-emerald-500' : 'border-slate-300 bg-slate-50'}`}>
-                                  {isSel && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                                </div>
-                                <span className="text-xs font-semibold">{mc.label}</span>
+                                {mc.label}
                               </button>
                             );
                           })}
@@ -2424,22 +2409,19 @@ function AppContent({
                           <span className="w-2 h-2 rounded-full bg-cyan-500" />
                           If Visual Detected
                         </h4>
-                        <div className="grid grid-cols-1 gap-2">
+                        <div className="grid grid-cols-2 gap-1.5">
                           {[
-                            { id: 'binary', label: 'Binary (Defect / No Defect)' },
-                            { id: '4cls', label: '6-Class Detection' }
+                            { id: 'binary', label: 'Binary' },
+                            { id: '4cls', label: '6-Class' }
                           ].map(mc => {
                             const isSel = vtModelClass === mc.id;
                             return (
                               <button
                                 key={`vt-${mc.id}`}
                                 onClick={() => setVtModelClass(mc.id)}
-                                className={`w-full py-2.5 px-3.5 rounded-xl border text-left transition-all duration-200 flex items-center gap-3 ${isSel ? 'bg-emerald-50/50 border-emerald-400 text-emerald-800 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
+                                className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-bold uppercase tracking-wider ${isSel ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
                               >
-                                <div className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 transition-colors ${isSel ? 'border-emerald-500 bg-emerald-500' : 'border-slate-300 bg-slate-50'}`}>
-                                  {isSel && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                                </div>
-                                <span className="text-xs font-semibold">{mc.label}</span>
+                                {mc.label}
                               </button>
                             );
                           })}
