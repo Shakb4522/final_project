@@ -828,6 +828,68 @@ async def save_retrain_data(req: RetrainSaveRequest):
         print(f"[Retrain Save Error] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/retrain/dataset")
+async def list_retrain_dataset():
+    try:
+        if not os.path.exists(IMAGES_DIR):
+            return {"images": []}
+            
+        items = []
+        for filename in os.listdir(IMAGES_DIR):
+            if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                name_part, _ = os.path.splitext(filename)
+                
+                label_filename = f"{name_part}.txt"
+                label_path = os.path.join(LABELS_DIR, label_filename)
+                num_labels = 0
+                label_contents = ""
+                
+                if os.path.exists(label_path):
+                    try:
+                        with open(label_path, "r") as f:
+                            lines = f.readlines()
+                            num_labels = len(lines)
+                            label_contents = "".join(lines)
+                    except Exception:
+                        pass
+                
+                img_path = os.path.join(IMAGES_DIR, filename)
+                try:
+                    with open(img_path, "rb") as f:
+                        encoded = base64.b64encode(f.read()).decode('utf-8')
+                        mime = "image/png" if filename.lower().endswith(".png") else "image/jpeg"
+                        b64_url = f"data:{mime};base64,{encoded}"
+                except Exception:
+                    b64_url = ""
+
+                items.append({
+                    "filename": filename,
+                    "num_labels": num_labels,
+                    "label_contents": label_contents,
+                    "image_url": b64_url
+                })
+        return {"images": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/retrain/dataset/{filename}")
+async def delete_retrain_item(filename: str):
+    try:
+        safe_filename = os.path.basename(filename)
+        img_path = os.path.join(IMAGES_DIR, safe_filename)
+        
+        name_part, _ = os.path.splitext(safe_filename)
+        label_path = os.path.join(LABELS_DIR, f"{name_part}.txt")
+        
+        if os.path.exists(img_path):
+            os.remove(img_path)
+        if os.path.exists(label_path):
+            os.remove(label_path)
+            
+        return {"status": "success", "message": f"Deleted {safe_filename} from dataset"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ─── Serve Static (Vite build) ─────────────────────────────────────────────────
 dist_path = os.path.join(os.path.dirname(__file__), "..", "dist")

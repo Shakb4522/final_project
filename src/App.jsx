@@ -311,6 +311,160 @@ const GlobalTraffic = ({ stats = [], onSelect }) => {
   );
 };
 
+const RetrainDatasetView = ({ API_URL }) => {
+  const [datasetItems, setDatasetItems] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [viewingLabels, setViewingLabels] = useState(null);
+
+  const fetchDataset = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/retrain/dataset`);
+      if (res.ok) {
+        const data = await res.json();
+        setDatasetItems(data.images || []);
+      }
+    } catch (err) {
+      console.error("Error fetching retraining dataset:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDelete = async (filename) => {
+    if (!window.confirm("Are you sure you want to delete this corrected sample from the retraining dataset?")) {
+      return;
+    }
+    try {
+      const res = await fetch(`${API_URL}/api/retrain/dataset/${encodeURIComponent(filename)}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        fetchDataset();
+      } else {
+        alert("Failed to delete sample.");
+      }
+    } catch (err) {
+      console.error("Error deleting sample:", err);
+      alert("Error deleting sample.");
+    }
+  };
+
+  useEffect(() => {
+    fetchDataset();
+  }, []);
+
+  const totalAnnotations = datasetItems.reduce((acc, item) => acc + (item.num_labels || 0), 0);
+
+  return (
+    <div className="flex-1 flex flex-col gap-6">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-4">
+        <div>
+          <h2 className="text-3xl font-black text-white uppercase tracking-tighter">Active Learning Dataset</h2>
+          <p className="text-slate-500 text-sm font-medium">Corrected scan samples and labels ready for retraining YOLO models.</p>
+        </div>
+        <div className="flex gap-4">
+          <div className="flex items-center gap-2 px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+            <span className="text-xs font-bold text-red-400 uppercase tracking-widest">{datasetItems.length} Samples</span>
+          </div>
+          <div className="flex items-center gap-2 px-4 py-2 bg-cyan-500/10 border border-cyan-500/20 rounded-lg">
+            <span className="text-xs font-bold text-cyan-400 uppercase tracking-widest">{totalAnnotations} Objects</span>
+          </div>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="flex-1 flex items-center justify-center py-20">
+          <div className="w-8 h-8 border-4 border-red-500/30 border-t-red-500 rounded-full animate-spin"></div>
+        </div>
+      ) : datasetItems.length === 0 ? (
+        <div className="glass-card p-12 text-center flex flex-col items-center justify-center border-white/5">
+          <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mb-4">
+            <svg className="w-8 h-8 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          </div>
+          <h3 className="text-lg font-bold text-white mb-1">No dataset samples yet</h3>
+          <p className="text-slate-500 text-sm max-w-sm">Use the "Scan" tab, enter the "Correction Studio" (Drawing Mode), and click "Save to Retraining Dataset" to add samples here.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+          {datasetItems.map((item, idx) => (
+            <div key={idx} className="glass-card overflow-hidden border-white/5 flex flex-col group hover:border-red-500/30 transition-all duration-300">
+              <div className="aspect-video w-full bg-slate-950 relative overflow-hidden flex items-center justify-center">
+                {item.image_url ? (
+                  <img src={item.image_url} alt={item.filename} className="object-cover w-full h-full group-hover:scale-105 transition-transform duration-500" />
+                ) : (
+                  <span className="text-xs text-slate-600">No Preview</span>
+                )}
+                <div className="absolute top-2 right-2 bg-slate-900/80 backdrop-blur-md border border-white/10 px-2 py-0.5 rounded text-[10px] font-bold text-white uppercase font-mono">
+                  {item.num_labels} {item.num_labels === 1 ? 'Object' : 'Objects'}
+                </div>
+              </div>
+              <div className="p-4 flex-1 flex flex-col justify-between gap-4">
+                <div className="space-y-1">
+                  <h4 className="text-xs font-bold text-white truncate font-mono" title={item.filename}>{item.filename}</h4>
+                  <p className="text-[10px] text-slate-500 truncate">Path: {item.filename}</p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setViewingLabels(item)}
+                    className="flex-1 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-white font-bold text-[10px] uppercase tracking-wider transition-colors"
+                  >
+                    View Labels
+                  </button>
+                  <button
+                    onClick={() => handleDelete(item.filename)}
+                    className="py-2 px-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg text-red-400 hover:text-red-300 transition-colors"
+                    title="Delete Sample"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Viewing Labels Modal */}
+      {viewingLabels && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+          <div className="w-full max-w-xl bg-[#0a0e17] border border-white/10 rounded-xl overflow-hidden shadow-2xl flex flex-col">
+            <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/[0.02]">
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono truncate max-w-[80%]">{viewingLabels.filename} - Labels</h3>
+              <button
+                onClick={() => setViewingLabels(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg bg-white/5 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-slate-400">YOLO Segment/Detection annotation format (class_id norm_points...):</p>
+              <div className="bg-slate-950 border border-white/5 rounded-lg p-4 font-mono text-xs text-slate-300 max-h-60 overflow-y-auto whitespace-pre-wrap">
+                {viewingLabels.label_contents || "# No labels found in txt file."}
+              </div>
+            </div>
+            <div className="p-4 border-t border-white/10 bg-white/[0.02] flex justify-end">
+              <button
+                onClick={() => setViewingLabels(null)}
+                className="px-4 py-2 bg-white hover:bg-slate-100 rounded-lg text-slate-900 text-xs font-bold uppercase tracking-wider transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const UsersView = ({ users = [] }) => {
   return (
     <div className="flex-1 flex flex-col gap-6">
@@ -2039,6 +2193,7 @@ function AppContent({
             <button onClick={() => setActiveTab('Global Traffic')} className={`text-sm font-medium transition-colors pb-1 border-b-2 ${activeTab === 'Global Traffic' ? 'text-red-500 border-red-500' : 'text-slate-400 hover:text-white border-transparent'}`}>Models</button>
             <button onClick={() => setActiveTab('Users')} className={`text-sm font-medium transition-colors pb-1 border-b-2 ${activeTab === 'Users' ? 'text-red-500 border-red-500' : 'text-slate-400 hover:text-white border-transparent'}`}>Users</button>
             <button onClick={() => setActiveTab('History')} className={`text-sm font-medium transition-colors pb-1 border-b-2 ${activeTab === 'History' ? 'text-red-500 border-red-500' : 'text-slate-400 hover:text-white border-transparent'}`}>History</button>
+            <button onClick={() => setActiveTab('Retrain Dataset')} className={`text-sm font-medium transition-colors pb-1 border-b-2 ${activeTab === 'Retrain Dataset' ? 'text-red-500 border-red-500' : 'text-slate-400 hover:text-white border-transparent'}`}>Dataset</button>
             {(userRole === 'Lead Inspector' || userRole === 'admin') && (
               <button onClick={() => setActiveTab('Audit')} className={`text-sm font-medium transition-colors pb-1 border-b-2 ${activeTab === 'Audit' ? 'text-red-500 border-red-500' : 'text-slate-400 hover:text-white border-transparent'}`}>Audit Log</button>
             )}
@@ -2110,7 +2265,7 @@ function AppContent({
                 </button>
               </div>
               <div className="flex flex-col gap-2 p-4">
-                {['Dashboard', 'Scan', 'Analytics', 'Global Traffic', 'Users', 'History', ...(userRole === 'Lead Inspector' || userRole === 'admin' ? ['Audit'] : [])].map((tab) => (
+                {['Dashboard', 'Scan', 'Analytics', 'Global Traffic', 'Users', 'History', 'Retrain Dataset', ...(userRole === 'Lead Inspector' || userRole === 'admin' ? ['Audit'] : [])].map((tab) => (
                   <button 
                     key={tab}
                     onClick={() => { setActiveTab(tab); setIsMobileMenuOpen(false); }} 
@@ -3159,6 +3314,10 @@ function AppContent({
           </motion.div>
         ) : activeTab === 'Analytics' ? (
           <AnalyticsView API_URL={API_URL} inspections={inspections} />
+        ) : activeTab === 'Retrain Dataset' ? (
+          <motion.div initial={{opacity:0, y:10}} animate={{opacity:1, y:0}} className="flex-1 w-full">
+            <RetrainDatasetView API_URL={API_URL} />
+          </motion.div>
         ) : activeTab === 'Audit' ? (
           <AuditLogView API_URL={API_URL} />
         ) : null}
