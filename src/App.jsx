@@ -3460,7 +3460,6 @@ function AppContent({
                     setIsRegisterMode(!isRegisterMode);
                     setLoginError('');
                   }}
-                  disabled={isLoggingIn}
                   className="text-[10px] text-slate-500 hover:text-white uppercase font-black tracking-widest transition-colors mt-2"
                 >
                   {isRegisterMode ? "Already have an account? Sign In" : "Need an account? Register here"}
@@ -3474,22 +3473,22 @@ function AppContent({
       {/* Correction & Retraining Studio Modal */}
       <AnimatePresence>
         {isRetrainStudioOpen && (
-          <div className="fixed inset-0 z-[250] flex items-center justify-center p-4 sm:p-6 bg-slate-950/95 backdrop-blur-md">
-            <div className="w-full max-w-7xl h-[90vh] bg-slate-900 border border-white/10 rounded-2xl flex flex-col overflow-hidden shadow-2xl shadow-black/80">
+          <div className="fixed inset-0 z-[250] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-md">
+            <div className="w-full max-w-7xl h-[90vh] bg-white border border-slate-200 rounded-2xl flex flex-col overflow-hidden shadow-2xl shadow-slate-200/50">
               
               {/* Header */}
-              <div className="flex-shrink-0 flex items-center justify-between p-6 border-b border-white/10 bg-slate-950/40">
+              <div className="flex-shrink-0 flex items-center justify-between p-6 border-b border-slate-200 bg-slate-50">
                 <div className="flex items-center gap-3">
                   <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-                  <h2 className="text-sm font-bold text-white uppercase tracking-wider">Correction & Retraining Studio</h2>
-                  <span className="text-[10px] font-black font-mono bg-white/10 text-slate-300 px-2 py-0.5 rounded-md border border-white/5">
+                  <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Correction & Retraining Studio</h2>
+                  <span className="text-[10px] font-bold font-mono bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md border border-slate-300/50">
                     {retrainBoxes.length} {retrainBoxes.length === 1 ? 'LABEL' : 'LABELS'}
                   </span>
                 </div>
                 <button 
                   type="button"
                   onClick={() => setIsRetrainStudioOpen(false)}
-                  className="p-1 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-white transition-colors"
+                  className="p-1.5 rounded-lg bg-slate-100 border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
@@ -3501,7 +3500,7 @@ function AppContent({
               <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-6 p-6">
                 
                 {/* Image & Canvas Section */}
-                <div className="lg:col-span-8 h-full flex items-center justify-center relative bg-black/60 rounded-xl border border-white/5 overflow-hidden select-none">
+                <div className="lg:col-span-8 h-full flex items-center justify-center relative bg-slate-950 rounded-xl border border-slate-200 overflow-hidden select-none">
                   {imagePreview && (
                     <div className="relative w-full h-full flex items-center justify-center">
                       <img 
@@ -3625,24 +3624,24 @@ function AppContent({
                 </div>
 
                 {/* Sidebar controls & active labels list */}
-                <div className="lg:col-span-4 h-full flex flex-col overflow-hidden bg-slate-900/60 border border-white/5 rounded-xl">
+                <div className="lg:col-span-4 h-full flex flex-col overflow-hidden bg-slate-50 border border-slate-200 rounded-xl">
                   
                   {/* Tool Options */}
-                  <div className="p-4 border-b border-white/10 space-y-4 flex-shrink-0">
+                  <div className="p-4 border-b border-slate-200 space-y-4 flex-shrink-0">
                     <div>
-                      <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Drawing Tool Mode</h3>
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Drawing Tool Mode</h3>
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
                           onClick={() => setRetrainDrawMode('box')}
-                          className={`py-2 px-3 rounded-lg text-xs font-bold transition-all border ${retrainDrawMode === 'box' ? 'bg-red-500/10 border-red-500 text-red-400 shadow-md' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}
+                          className={`py-2 px-3 rounded-lg text-xs font-bold transition-all border ${retrainDrawMode === 'box' ? 'bg-red-600 border-red-600 text-white shadow-md shadow-red-600/10' : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'}`}
                         >
                           Bounding Box
                         </button>
                         <button
                           type="button"
                           onClick={() => setRetrainDrawMode('segment')}
-                          className={`py-2 px-3 rounded-lg text-xs font-bold transition-all border ${retrainDrawMode === 'segment' ? 'bg-red-500/10 border-red-500 text-red-400 shadow-md' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}
+                          className={`py-2 px-3 rounded-lg text-xs font-bold transition-all border ${retrainDrawMode === 'segment' ? 'bg-red-600 border-red-600 text-white shadow-md shadow-red-600/10' : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'}`}
                         >
                           Segmentation Mask
                         </button>
@@ -3650,16 +3649,16 @@ function AppContent({
                     </div>
 
                     <div>
-                      <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Defect Category</h3>
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Defect Category</h3>
                       <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
                         {RETRAIN_CLASSES.map(cls => (
                           <button
                             key={cls.id}
                             type="button"
                             onClick={() => setRetrainClass(cls.id)}
-                            className={`py-1.5 px-2.5 rounded-lg text-[10px] font-bold text-left transition-all border flex items-center gap-2 ${retrainClass === cls.id ? 'bg-white/10 border-white/30 text-white' : 'bg-white/5 border-white/5 text-slate-400 hover:bg-white/10'}`}
+                            className={`py-1.5 px-2.5 rounded-lg text-[10px] font-bold text-left transition-all border flex items-center gap-2 ${retrainClass === cls.id ? 'bg-white border-slate-300 text-slate-800 shadow-sm' : 'bg-slate-100 border-transparent text-slate-500 hover:bg-slate-200/60'}`}
                           >
-                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cls.color }} />
+                            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: cls.color }} />
                             <span className="truncate">{cls.name}</span>
                           </button>
                         ))}
@@ -3669,27 +3668,27 @@ function AppContent({
 
                   {/* Active Labels List */}
                   <div className="flex-1 overflow-y-auto p-4 min-h-0 flex flex-col">
-                    <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 flex-shrink-0">Active Labels ({retrainBoxes.length})</h3>
+                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex-shrink-0">Active Labels ({retrainBoxes.length})</h3>
                     <div className="space-y-2 flex-1 overflow-y-auto pr-1">
                       {retrainBoxes.map((box, idx) => {
                         const colorClass = RETRAIN_CLASSES.find(c => c.id === box.label) || { color: "#ef4444", name: box.label };
                         return (
                           <div 
                             key={idx}
-                            className={`flex items-center justify-between p-3 rounded-xl border transition-all ${box.hidden ? 'bg-white/2 border-white/5 opacity-50' : 'bg-white/5 border-white/10 hover:border-white/25'}`}
+                            className={`flex items-center justify-between p-3 rounded-xl border transition-all ${box.hidden ? 'bg-slate-100 border-slate-200/60 opacity-50' : 'bg-white border-slate-200 hover:border-slate-300 shadow-sm'}`}
                           >
                             <div className="flex items-center gap-2.5 min-w-0">
                               <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: colorClass.color }} />
                               <div className="truncate">
-                                <div className="text-xs font-bold text-white capitalize truncate">{colorClass.name.replace('_', ' ')}</div>
-                                <div className="text-[8px] font-bold text-slate-500 uppercase tracking-wider">{box.type === 'mask' ? 'segmentation' : 'bounding box'}</div>
+                                <div className="text-xs font-bold text-slate-700 capitalize truncate">{colorClass.name.replace('_', ' ')}</div>
+                                <div className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">{box.type === 'mask' ? 'segmentation' : 'bounding box'}</div>
                               </div>
                             </div>
                             <div className="flex items-center gap-1">
                               <button
                                 type="button"
                                 onClick={() => toggleHideRetrainBox(idx)}
-                                className={`p-1.5 rounded-lg transition-colors border ${box.hidden ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'}`}
+                                className={`p-1.5 rounded-lg transition-colors border ${box.hidden ? 'bg-red-50 border-red-100 text-red-500' : 'bg-slate-100 border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-200'}`}
                               >
                                 {box.hidden ? (
                                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3705,7 +3704,7 @@ function AppContent({
                               <button
                                 type="button"
                                 onClick={() => deleteRetrainBox(idx)}
-                                className="p-1.5 rounded-lg bg-white/5 border border-white/10 hover:border-red-500/30 text-slate-400 hover:text-red-400 transition-colors"
+                                className="p-1.5 rounded-lg bg-slate-100 border border-slate-200 hover:border-red-200 hover:bg-red-50 text-slate-500 hover:text-red-600 transition-all"
                               >
                                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-4v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -3722,7 +3721,7 @@ function AppContent({
                   </div>
 
                   {/* Actions Footer */}
-                  <div className="p-4 border-t border-white/10 bg-slate-950/40 space-y-2 flex-shrink-0">
+                  <div className="p-4 border-t border-slate-200 bg-slate-50 space-y-2 flex-shrink-0">
                     <button
                       type="button"
                       onClick={saveRetrainData}
@@ -3741,7 +3740,7 @@ function AppContent({
                     <button
                       type="button"
                       onClick={() => setIsRetrainStudioOpen(false)}
-                      className="w-full py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-slate-400 hover:text-white font-medium text-xs tracking-wider uppercase transition-all"
+                      className="w-full py-3 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-500 hover:text-slate-800 font-bold text-xs tracking-wider uppercase transition-all shadow-sm"
                     >
                       Cancel
                     </button>

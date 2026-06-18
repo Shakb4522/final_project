@@ -4,30 +4,79 @@
 
 @layer utilities {
   .glass-card {
-    @apply bg-slate-900/60 backdrop-blur-xl border border-white/5 shadow-[0_4px_30px_rgba(0,0,0,0.1)] rounded-2xl;
+    background-color: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important;
+    border-radius: 16px !important;
   }
   
   .btn-gradient {
-    @apply bg-gradient-to-br from-red-600 to-red-800 text-white shadow-[0_4px_15px_rgba(220,38,38,0.3)] transition-all duration-300;
+    @apply bg-red-600 text-white font-medium rounded-lg transition-colors duration-200;
   }
   
   .btn-gradient:hover:not(:disabled) {
-    @apply -translate-y-[2px] shadow-[0_8px_25px_rgba(220,38,38,0.4)] brightness-110;
+    @apply bg-red-700;
   }
 
   .btn-gradient:disabled {
-    @apply opacity-50 cursor-not-allowed transform-none shadow-none;
+    @apply opacity-50 cursor-not-allowed;
   }
 }
 
 body {
-  background-color: #0a0e17;
-  background-image: 
-    radial-gradient(circle at 15% 50%, rgba(220, 38, 38, 0.05), transparent 25%),
-    radial-gradient(circle at 85% 30%, rgba(255, 255, 255, 0.02), transparent 25%);
-  color: #f8fafc;
+  background-color: #f9f9fb !important;
+  color: #18181b !important;
   min-height: 100vh;
   overflow-x: hidden;
+}
+
+/* Base text color overrides inside glass-cards for clean readability */
+.glass-card h1, .glass-card h2, .glass-card h3, .glass-card h4, .glass-card p, .glass-card span:not(.btn-gradient *):not(.text-red-400):not(.text-emerald-400) {
+  color: #27272a !important;
+}
+.glass-card h1, .glass-card h2, .glass-card h3, .glass-card h4 {
+  color: #0f172a !important;
+  font-weight: 600 !important;
+}
+.glass-card .text-slate-400, .glass-card .text-slate-500 {
+  color: #71717a !important;
+}
+
+/* Sidebar and Main Layout overrides */
+aside.bg-slate-950, .bg-slate-950 {
+  background-color: #f4f4f5 !important;
+  border-color: #e4e4e7 !important;
+}
+.text-slate-400 {
+  color: #71717a !important;
+}
+.text-slate-100, .text-slate-200, .text-slate-300 {
+  color: #18181b !important;
+}
+
+/* Explicitly keep button text white when active */
+.glass-card button.text-white,
+.glass-card button .text-white,
+.glass-card button.bg-zinc-900,
+.glass-card button.bg-red-600,
+.glass-card button.bg-slate-900 {
+  color: #ffffff !important;
+}
+
+.glass-card label {
+  color: #71717a !important;
+}
+
+.glass-card input, 
+.glass-card select, 
+.glass-card textarea {
+  background-color: #ffffff !important;
+  color: #18181b !important;
+  border-color: #e4e4e7 !important;
+}
+
+.glass-card input::placeholder {
+  color: #a1a1aa !important;
 }
 
 /* Toggles */
