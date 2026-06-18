@@ -2322,7 +2322,7 @@ function AppContent({
                         <button 
                           key={m.id}
                           onClick={() => setAnalysisModel(m.id)}
-                          className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-black uppercase tracking-wider ${isActive ? 'bg-red-600 border-red-600 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
+                          className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-black uppercase tracking-wider ${isActive ? 'bg-slate-900 border-slate-900 text-white shadow-sm' : 'bg-slate-100 border-transparent text-slate-500 hover:bg-slate-200 hover:text-slate-800'}`}
                         >
                           {m.label}
                         </button>
@@ -2345,7 +2345,7 @@ function AppContent({
                             <button
                               key={mc.id}
                               onClick={() => setRtModelClass(mc.id)}
-                              className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-bold uppercase tracking-wider ${isSel ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
+                              className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-bold uppercase tracking-wider ${isSel ? 'bg-slate-900 border-slate-900 text-white shadow-sm' : 'bg-slate-100 border-transparent text-slate-500 hover:bg-slate-200 hover:text-slate-800'}`}
                             >
                               {mc.label}
                             </button>
@@ -2368,7 +2368,7 @@ function AppContent({
                             <button
                               key={mc.id}
                               onClick={() => setVtModelClass(mc.id)}
-                              className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-bold uppercase tracking-wider ${isSel ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
+                              className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-bold uppercase tracking-wider ${isSel ? 'bg-slate-900 border-slate-900 text-white shadow-sm' : 'bg-white border-slate-100 border-transparent text-slate-500 hover:bg-slate-200 hover:text-slate-800'}`}
                             >
                               {mc.label}
                             </button>
@@ -2396,7 +2396,7 @@ function AppContent({
                               <button
                                 key={`rt-${mc.id}`}
                                 onClick={() => setRtModelClass(mc.id)}
-                                className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-bold uppercase tracking-wider ${isSel ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
+                                className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-bold uppercase tracking-wider ${isSel ? 'bg-slate-900 border-slate-900 text-white shadow-sm' : 'bg-slate-100 border-transparent text-slate-500 hover:bg-slate-200 hover:text-slate-800'}`}
                               >
                                 {mc.label}
                               </button>
@@ -2419,7 +2419,7 @@ function AppContent({
                               <button
                                 key={`vt-${mc.id}`}
                                 onClick={() => setVtModelClass(mc.id)}
-                                className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-bold uppercase tracking-wider ${isSel ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50/50'}`}
+                                className={`py-2 px-1 rounded-lg border text-center transition-all duration-200 text-[9px] font-bold uppercase tracking-wider ${isSel ? 'bg-slate-900 border-slate-900 text-white shadow-sm' : 'bg-slate-100 border-transparent text-slate-500 hover:bg-slate-200 hover:text-slate-800'}`}
                               >
                                 {mc.label}
                               </button>
