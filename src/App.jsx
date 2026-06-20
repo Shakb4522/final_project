@@ -1235,6 +1235,7 @@ export default function App() {
   const [qwenHistory, setQwenHistory] = useState(Array(24).fill(0));
 
   const [currentInspectionId, setCurrentInspectionId] = useState(null);
+  const [currentPendingRecord, setCurrentPendingRecord] = useState(null);
   const [currentInspectionDecision, setCurrentInspectionDecision] = useState(null);
   const [reportNotes, setReportNotes] = useState("");
   const [weldForm, setWeldForm] = useState({
@@ -1455,7 +1456,7 @@ export default function App() {
       // Auto-trigger AI summary
       const boxes_found = newDetections.filter(d => d.type === "box");
 
-      // Save to DB
+      // Save to local pending state (will be posted to DB when a decision button is clicked)
       try {
         const newRecord = {
           id: Date.now(),
@@ -1474,18 +1475,8 @@ export default function App() {
         };
         setCurrentInspectionId(newRecord.id);
         setCurrentInspectionDecision(null);
-
-        fetch(`${API_URL}/api/inspections`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-user-id": userId || "Anonymous",
-            "x-user-role": userRole || "Inspector"
-          },
-          body: JSON.stringify(newRecord)
-        });
-        setInspections(prev => [newRecord, ...prev]);
-      } catch (e) { console.error("Inspection Save Error:", e); }
+        setCurrentPendingRecord(newRecord);
+      } catch (e) { console.error("Inspection Setup Error:", e); }
 
       triggerAISummary(boxes_found, currentChatId, currentChat.messages);
     } catch (error) {
@@ -1498,25 +1489,55 @@ export default function App() {
 
   const handleDecision = async (decision) => {
     if (!currentInspectionId) return;
+    
     setCurrentInspectionDecision(decision);
     setReportNotes(`Weld quality analysis reveals structural integrity meets required standards for ${decision.toLowerCase()} status.\n\nPrimary Findings:\n- Total Defects: ${detections.filter(d => d.type === 'box').length}\n- Inspector Verdict: ${decision.toUpperCase()}\n\nRecommendation:\n[Please enter final engineer recommendation here]`);
     setActiveTab('Report');
     
     try {
-      await fetch(`${API_URL}/api/inspections/${currentInspectionId}`, {
-        method: "PATCH",
-        headers: { 
-          "Content-Type": "application/json",
-          "x-user-id": userId || "Anonymous",
-          "x-user-role": userRole || "Inspector"
-        },
-        body: JSON.stringify({ decision })
-      });
-      
-      // Update local history
-      setInspections(prev => prev.map(insp => 
-        insp.id === currentInspectionId ? { ...insp, decision } : insp
-      ));
+      if (currentPendingRecord) {
+        // First-time save (POST)
+        const finalRecord = {
+          ...currentPendingRecord,
+          decision: decision,
+          detections: detections, // Save the latest detections (with manual corrections!)
+          project_name: weldForm.project_name || currentPendingRecord.project_name || "Sonatrach Pipeline A",
+          client_name: weldForm.client_name || currentPendingRecord.client_name || "Sonatrach",
+          weld_id: weldForm.weld_id || currentPendingRecord.weld_id || `W-${Date.now().toString().slice(-6)}`,
+          thickness_mm: parseFloat(weldForm.thickness_mm) || currentPendingRecord.thickness_mm || 12.5,
+          standard: weldForm.standard || currentPendingRecord.standard || "EN 1435",
+          material: weldForm.material || currentPendingRecord.material || "Carbon Steel",
+        };
+        
+        await fetch(`${API_URL}/api/inspections`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-user-id": userId || "Anonymous",
+            "x-user-role": userRole || "Inspector"
+          },
+          body: JSON.stringify(finalRecord)
+        });
+        
+        setInspections(prev => [finalRecord, ...prev]);
+        setCurrentPendingRecord(null); // clear pending
+      } else {
+        // Update existing record (PATCH)
+        await fetch(`${API_URL}/api/inspections/${currentInspectionId}`, {
+          method: "PATCH",
+          headers: { 
+            "Content-Type": "application/json",
+            "x-user-id": userId || "Anonymous",
+            "x-user-role": userRole || "Inspector"
+          },
+          body: JSON.stringify({ decision })
+        });
+        
+        // Update local history
+        setInspections(prev => prev.map(insp => 
+          insp.id === currentInspectionId ? { ...insp, decision } : insp
+        ));
+      }
     } catch (e) {
       console.error("Decision Update Error:", e);
     }
@@ -2238,6 +2259,11 @@ function AppContent({
   const filteredDetections = (detections || []).filter(d => (d.confidence ?? 1.0) >= confThreshold);
   const filteredBoxes = filteredDetections.filter(d => d.type === 'box');
   const filteredMasks = filteredDetections.filter(d => d.type === 'mask');
+  const uniqueProjectNames = Array.from(new Set(
+    (inspections || [])
+      .map(insp => insp.project_name)
+      .filter(name => typeof name === 'string' && name.trim().length > 0)
+  ));
   const isVisualInspection = analysisModel === 'Visual (Photo)' || 
     (analysisModel === 'Auto-Detect' && (
       currentModelUsed.toLowerCase().includes('visual') || 
@@ -2854,11 +2880,17 @@ function AppContent({
                         <label className="block text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">Project Name</label>
                         <input 
                           type="text" 
+                          list="project-names-list"
                           placeholder="Pipeline A" 
                           value={weldForm.project_name}
                           onChange={(e) => setWeldForm(f => ({ ...f, project_name: e.target.value }))}
                           className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-red-500 transition-colors"
                         />
+                        <datalist id="project-names-list">
+                          {uniqueProjectNames.map((name, index) => (
+                            <option key={index} value={name} />
+                          ))}
+                        </datalist>
                       </div>
                       <div>
                         <label className="block text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">Client</label>
@@ -3274,25 +3306,32 @@ function AppContent({
 
 
                   {!currentInspectionDecision ? (
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-3 gap-3">
                       <button 
                         onClick={() => handleDecision('Refused')}
                         className="flex flex-col items-center justify-center gap-1 py-3 bg-red-500/10 border border-red-500/30 text-red-400 rounded-xl font-bold hover:bg-red-500/20 transition-all group"
                       >
                         <svg className="w-5 h-5 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                        <span>REFUSE</span>
+                        <span className="text-[10px] tracking-wider">REFUSE</span>
+                      </button>
+                      <button 
+                        onClick={() => handleDecision('Pending')}
+                        className="flex flex-col items-center justify-center gap-1 py-3 bg-slate-500/10 border border-slate-500/30 text-slate-400 rounded-xl font-bold hover:bg-slate-500/20 transition-all group"
+                      >
+                        <svg className="w-5 h-5 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        <span className="text-[10px] tracking-wider">PENDING</span>
                       </button>
                       <button 
                         onClick={() => handleDecision('Accepted')}
                         className="flex flex-col items-center justify-center gap-1 py-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-xl font-bold hover:bg-emerald-500/20 transition-all group"
                       >
                         <svg className="w-5 h-5 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
-                        <span>ACCEPT</span>
+                        <span className="text-[10px] tracking-wider">ACCEPT</span>
                       </button>
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      <div className={`py-4 text-center rounded-xl border ${currentInspectionDecision === 'Accepted' ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400' : 'bg-red-500/20 border-red-500/50 text-red-400'}`}>
+                      <div className={`py-4 text-center rounded-xl border ${currentInspectionDecision === 'Accepted' ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400' : currentInspectionDecision === 'Refused' ? 'bg-red-500/20 border-red-500/50 text-red-400' : 'bg-slate-500/20 border-slate-500/50 text-slate-400'}`}>
                         <div className="text-xs uppercase tracking-widest mb-1 opacity-60">Final Decision</div>
                         <div className="text-lg font-black tracking-tighter">{currentInspectionDecision.toUpperCase()}</div>
                       </div>
@@ -3548,7 +3587,7 @@ function AppContent({
               </div>
             ) : inspections.length === 0 ? (
               <div className="text-center text-slate-500 py-20 flex flex-col items-center">
-                <svg className="w-12 h-12 mb-3 text-slate-600/50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                <svg className="w-12 h-12 mb-3 text-slate-600/50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012 2v2M7 7h10"></path></svg>
                 <span>No inspections recorded in the database yet.</span>
               </div>
             ) : (
@@ -3566,26 +3605,37 @@ function AppContent({
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-slate-700">No Image</div>
                       )}
+                      {/* Left Badge: Decision Status */}
+                      <div className="absolute top-2 left-2 bg-black/80 backdrop-blur-md px-2 py-1 rounded border border-white/10 flex items-center gap-1.5 z-20">
+                        <span className={`w-1.5 h-1.5 rounded-full ${insp.decision === 'Accepted' ? 'bg-emerald-500' : insp.decision === 'Refused' ? 'bg-red-500' : 'bg-slate-400 animate-pulse'}`}></span>
+                        <span className="text-[8px] font-bold text-white uppercase tracking-wider">
+                          {insp.decision || 'PENDING'}
+                        </span>
+                      </div>
+                      {/* Right Badge: Defect Count */}
                       <div className="absolute top-2 right-2 bg-black/80 backdrop-blur-md px-2 py-1 rounded border border-white/10 flex items-center gap-1.5 z-20">
                         <span className={`w-1.5 h-1.5 rounded-full ${defectCount > 0 ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`}></span>
                         <span className="text-[9px] font-bold text-white uppercase tracking-wider">{defectCount > 0 ? `${defectCount} Defects` : 'All Clear'}</span>
                       </div>
                     </div>
                     <div className="relative z-20 flex justify-between items-end">
-                      <div>
+                      <div className="min-w-0 flex-1 pr-2">
                         <div className="flex items-center gap-2 mb-1.5">
                           <div className="w-5 h-5 rounded bg-slate-800 flex items-center justify-center overflow-hidden border border-white/10">
                             <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${insp.username || 'Guest'}&backgroundColor=transparent`} className="w-full h-full object-cover" alt="user" />
                           </div>
-                          <span className="text-[10px] text-slate-300 font-bold uppercase tracking-wider">{insp.username || 'Unknown'}</span>
+                          <span className="text-[10px] text-slate-300 font-bold uppercase tracking-wider truncate">{insp.username || 'Unknown'}</span>
                         </div>
                         <div className="text-[9px] text-slate-500 font-mono uppercase tracking-wider mb-1">ID #{Math.floor(insp.id || Date.parse(insp.timestamp || new Date().toISOString()) || 0).toString().slice(-6)}</div>
-                        <div className="text-sm font-bold text-slate-300 group-hover:text-white transition-colors">
-                          {String(insp.timestamp || '').split(',')[0]}
+                        <div className="text-sm font-bold text-slate-100 group-hover:text-red-400 transition-colors truncate capitalize">
+                          {insp.project_name || 'Unnamed Project'}
                         </div>
                       </div>
-                      <div className="flex flex-col gap-2">
-                        <div className="text-xs font-mono text-slate-400 bg-white/5 px-2 py-1 rounded">
+                      <div className="flex flex-col gap-1 items-end flex-shrink-0">
+                        <div className="text-[10px] text-slate-400 font-medium">
+                          {String(insp.timestamp || '').split(',')[0]}
+                        </div>
+                        <div className="text-[9px] font-mono text-slate-500 bg-white/5 px-1.5 py-0.5 rounded">
                           {String(insp.timestamp || '').split(',')[1]?.trim() || insp.timestamp}
                         </div>
                       </div>

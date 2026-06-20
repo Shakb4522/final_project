@@ -178,6 +178,12 @@ class InspectionRecord(BaseModel):
     username: Optional[str] = "Anonymous"
     decision: Optional[str] = None
     model_used: Optional[str] = None
+    project_name: Optional[str] = None
+    client_name: Optional[str] = None
+    weld_id: Optional[str] = None
+    thickness_mm: Optional[float] = None
+    standard: Optional[str] = None
+    material: Optional[str] = None
 
 
 # ─── Helper ────────────────────────────────────────────────────────────────────
