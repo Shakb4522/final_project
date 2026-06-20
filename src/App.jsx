@@ -47,11 +47,23 @@ const labelColors = {};
 let colorIndex = 0;
 
 function getColorForLabel(label) {
-  if (!labelColors[label]) {
-    labelColors[label] = palette[colorIndex % palette.length];
+  const cleanLabel = label.toLowerCase().trim().replace(/ /g, '_');
+  const foundClass = RETRAIN_CLASSES.find(c => c.id === cleanLabel);
+  if (foundClass) {
+    return {
+      hex: foundClass.color,
+      rgb: foundClass.rgb.replace(/\s+/g, '')
+    };
+  }
+  if (!labelColors[cleanLabel]) {
+    const pal = palette[colorIndex % palette.length];
+    labelColors[cleanLabel] = {
+      hex: pal.hex,
+      rgb: pal.rgb.replace(/\s+/g, '')
+    };
     colorIndex++;
   }
-  return labelColors[label];
+  return labelColors[cleanLabel];
 }
 
 const ModelDetailsModal = ({ isOpen, onClose, model, apiUrl, userId }) => {
@@ -311,10 +323,30 @@ const GlobalTraffic = ({ stats = [], onSelect }) => {
   );
 };
 
-const RetrainDatasetView = ({ API_URL }) => {
+const RETRAIN_MODELS = [
+  { id: 'radio_binary', name: 'Radiographic Binary', desc: 'Active learning dataset for the RT binary defect detector.' },
+  { id: 'radio_4classes', name: 'Radiographic 4-Class', desc: 'Active learning dataset for the RT 4-class defect detector.' },
+  { id: 'radio_7classes', name: 'Radiographic 7-Class', desc: 'Active learning dataset for the RT 7-class defect detector.' },
+  { id: 'visual_binary', name: 'Visual Binary', desc: 'Active learning dataset for the VT binary defect detector.' },
+  { id: 'visual_6classes', name: 'Visual 6-Class', desc: 'Active learning dataset for the VT 6-class defect detector.' },
+];
+
+const RetrainDatasetView = ({ 
+  API_URL, 
+  setImagePreview, 
+  setRetrainBoxes, 
+  setIsRetrainStudioOpen, 
+  setImageFile, 
+  setRetrainClass, 
+  setRetrainDrawMode, 
+  getRetrainClasses,
+  setDetectedModelName,
+  setStudioClassNames
+}) => {
   const [datasetItems, setDatasetItems] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [viewingLabels, setViewingLabels] = useState(null);
+  const [activeModelTab, setActiveModelTab] = useState('radio_binary');
 
   const fetchDataset = async () => {
     setIsLoading(true);
@@ -331,12 +363,15 @@ const RetrainDatasetView = ({ API_URL }) => {
     }
   };
 
-  const handleDelete = async (filename) => {
+  const handleDelete = async (filename, modelName) => {
     if (!window.confirm("Are you sure you want to delete this corrected sample from the retraining dataset?")) {
       return;
     }
     try {
-      const res = await fetch(`${API_URL}/api/retrain/dataset/${encodeURIComponent(filename)}`, {
+      const url = modelName
+        ? `${API_URL}/api/retrain/dataset/${encodeURIComponent(modelName)}/${encodeURIComponent(filename)}`
+        : `${API_URL}/api/retrain/dataset/${encodeURIComponent(filename)}`;
+      const res = await fetch(url, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -354,18 +389,120 @@ const RetrainDatasetView = ({ API_URL }) => {
     fetchDataset();
   }, []);
 
-  const totalAnnotations = datasetItems.reduce((acc, item) => acc + (item.num_labels || 0), 0);
+  const parseYoloLabels = (label_contents, width, height, customClassNames, filename) => {
+    if (!label_contents) return [];
+    const lines = label_contents.split('\n');
+    const parsed = [];
+    
+    // Class index mapping back to class names
+    // Fallbacks match legacy backend CLASS_MAP to maintain backward compatibility
+    const defaultClasses = ["porosity", "slag", "crack", "tungsten", "undercut", "lack_of_fusion", "lack_of_penetration", "spatter"];
+
+    const classNames = customClassNames && customClassNames.length > 0
+      ? customClassNames
+      : defaultClasses;
+
+    lines.forEach(line => {
+      const parts = line.trim().split(/\s+/).filter(Boolean);
+      if (parts.length < 5) return;
+      
+      const classId = parseInt(parts[0], 10);
+      const label = classNames[classId] || `class_${classId}`;
+      
+      const coords = parts.slice(1).map(Number);
+      if (coords.some(isNaN)) return;
+      
+      if (coords.length === 4) {
+        // Standard YOLO Box format: class_id x_center y_center w h (normalized)
+        const [x_center, y_center, w, h] = coords;
+        const x1 = (x_center - w / 2) * width;
+        const y1 = (y_center - h / 2) * height;
+        const x2 = (x_center + w / 2) * width;
+        const y2 = (y_center + h / 2) * height;
+
+        parsed.push({
+          type: 'box',
+          label: label,
+          xyxy: [x1, y1, x2, y2],
+          confidence: 1.0
+        });
+      } else if (coords.length >= 6) {
+        // Standard YOLO Segment format: class_id x1 y1 x2 y2 x3 y3 ... (normalized)
+        const points = [];
+        for (let i = 0; i < coords.length; i += 2) {
+          if (coords[i] !== undefined && coords[i+1] !== undefined) {
+            points.push([
+              coords[i] * width,
+              coords[i+1] * height
+            ]);
+          }
+        }
+
+        if (points.length >= 3) {
+          const xs = points.map(p => p[0]);
+          const ys = points.map(p => p[1]);
+          const x1 = Math.min(...xs);
+          const y1 = Math.min(...ys);
+          const x2 = Math.max(...xs);
+          const y2 = Math.max(...ys);
+
+          parsed.push({
+            type: 'mask',
+            label: label,
+            points: points,
+            xyxy: [x1, y1, x2, y2],
+            confidence: 1.0
+          });
+        }
+      }
+    });
+    
+    return parsed;
+  };
+
+  const handleEditClick = (item) => {
+    setImagePreview(item.image_url);
+    if (setDetectedModelName) {
+      setDetectedModelName(item.model_name || '');
+    }
+    if (setStudioClassNames) {
+      setStudioClassNames(item.class_names || []);
+    }
+    
+    const parsed = parseYoloLabels(item.label_contents, item.width || 640, item.height || 480, item.class_names, item.filename);
+    setRetrainBoxes(parsed.map(det => ({ ...det, hidden: false })));
+    setImageFile({ name: item.filename });
+
+    const activeClasses = getRetrainClasses ? getRetrainClasses() : [];
+    if (activeClasses && activeClasses.length > 0) {
+      setRetrainClass(activeClasses[0].id);
+    } else {
+      setRetrainClass("porosity");
+    }
+
+    const isVT = (item.model_name && item.model_name.startsWith('visual')) || item.filename.toLowerCase().includes("vt") || item.filename.toLowerCase().includes("visual");
+    setRetrainDrawMode(isVT ? "segment" : "box");
+    setIsRetrainStudioOpen(true);
+  };
+
+  const getClassColor = (label) => {
+    return getColorForLabel(label).hex;
+  };
+
+  const currentModel = RETRAIN_MODELS.find(m => m.id === activeModelTab) || RETRAIN_MODELS[0];
+  const filteredItems = datasetItems.filter(item => item.model_name === activeModelTab);
+  const totalAnnotations = filteredItems.reduce((acc, item) => acc + (item.num_labels || 0), 0);
 
   return (
     <div className="flex-1 flex flex-col gap-6">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-4">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-2">
         <div>
           <h2 className="text-3xl font-black text-white uppercase tracking-tighter">Active Learning Dataset</h2>
           <p className="text-slate-500 text-sm font-medium">Corrected scan samples and labels ready for retraining YOLO models.</p>
         </div>
         <div className="flex gap-4">
           <div className="flex items-center gap-2 px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
-            <span className="text-xs font-bold text-red-400 uppercase tracking-widest">{datasetItems.length} Samples</span>
+            <span className="text-xs font-bold text-red-400 uppercase tracking-widest">{filteredItems.length} Samples</span>
           </div>
           <div className="flex items-center gap-2 px-4 py-2 bg-cyan-500/10 border border-cyan-500/20 rounded-lg">
             <span className="text-xs font-bold text-cyan-400 uppercase tracking-widest">{totalAnnotations} Objects</span>
@@ -373,59 +510,205 @@ const RetrainDatasetView = ({ API_URL }) => {
         </div>
       </div>
 
+      {/* Model Selection Tabs */}
+      <div className="flex flex-wrap gap-2 border-b border-white/5 pb-4">
+        {RETRAIN_MODELS.map(m => {
+          const count = datasetItems.filter(item => item.model_name === m.id).length;
+          const isActive = activeModelTab === m.id;
+          return (
+            <button
+              key={m.id}
+              onClick={() => setActiveModelTab(m.id)}
+              className={`px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-lg border transition-all duration-300 ${
+                isActive
+                  ? 'bg-red-500 text-white border-red-500 shadow-lg shadow-red-500/20'
+                  : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              {m.name} ({count})
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Selected Model Description & Download Banner */}
+      <div className="glass-card p-6 border-white/5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 bg-gradient-to-r from-red-500/[0.02] to-transparent">
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">{currentModel.name}</h3>
+          </div>
+          <p className="text-xs text-slate-400 max-w-2xl">{currentModel.desc}</p>
+          <div className="flex gap-4 pt-1">
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{filteredItems.length} Samples</span>
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{totalAnnotations} Objects</span>
+          </div>
+        </div>
+        
+        <button
+          onClick={() => {
+            if (filteredItems.length > 0) {
+              window.location.href = `${API_URL}/api/retrain/download/${activeModelTab}`;
+            }
+          }}
+          disabled={filteredItems.length === 0}
+          className={`px-6 py-3 rounded-xl font-bold text-xs uppercase tracking-widest flex items-center gap-2 transition-all duration-300 ${
+            filteredItems.length > 0
+              ? 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white shadow-lg shadow-red-500/20 hover:shadow-red-500/30 cursor-pointer'
+              : 'bg-white/5 text-slate-500 border border-white/5 cursor-not-allowed'
+          }`}
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+          </svg>
+          Download ZIP Dataset
+        </button>
+      </div>
+
       {isLoading ? (
         <div className="flex-1 flex items-center justify-center py-20">
           <div className="w-8 h-8 border-4 border-red-500/30 border-t-red-500 rounded-full animate-spin"></div>
         </div>
-      ) : datasetItems.length === 0 ? (
-        <div className="glass-card p-12 text-center flex flex-col items-center justify-center border-white/5">
+      ) : filteredItems.length === 0 ? (
+        <div className="glass-card p-12 text-center flex flex-col items-center justify-center border-white/5 py-20">
           <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mb-4">
             <svg className="w-8 h-8 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
           </div>
           <h3 className="text-lg font-bold text-white mb-1">No dataset samples yet</h3>
-          <p className="text-slate-500 text-sm max-w-sm">Use the "Scan" tab, enter the "Correction Studio" (Drawing Mode), and click "Save to Retraining Dataset" to add samples here.</p>
+          <p className="text-slate-500 text-sm max-w-sm">Use the "Scan" tab, choose this model class, enter the "Correction Studio" (Drawing Mode), and click "Save to Retraining Dataset" to add samples here.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {datasetItems.map((item, idx) => (
-            <div key={idx} className="glass-card overflow-hidden border-white/5 flex flex-col group hover:border-red-500/30 transition-all duration-300">
-              <div className="aspect-video w-full bg-slate-950 relative overflow-hidden flex items-center justify-center">
-                {item.image_url ? (
-                  <img src={item.image_url} alt={item.filename} className="object-cover w-full h-full group-hover:scale-105 transition-transform duration-500" />
-                ) : (
-                  <span className="text-xs text-slate-600">No Preview</span>
-                )}
-                <div className="absolute top-2 right-2 bg-slate-900/80 backdrop-blur-md border border-white/10 px-2 py-0.5 rounded text-[10px] font-bold text-white uppercase font-mono">
-                  {item.num_labels} {item.num_labels === 1 ? 'Object' : 'Objects'}
+          {filteredItems.map((item, idx) => {
+            const detections = parseYoloLabels(item.label_contents, item.width || 640, item.height || 480, item.class_names, item.filename);
+            const masks = detections.filter(d => d.type === 'mask');
+            const boxes = detections.filter(d => d.type !== 'mask');
+
+            return (
+              <div key={idx} className="glass-card overflow-hidden border-white/5 flex flex-col group hover:border-red-500/30 transition-all duration-300">
+                <div 
+                  onClick={() => handleEditClick(item)}
+                  className="aspect-video w-full bg-slate-950 relative overflow-hidden flex items-center justify-center cursor-pointer"
+                >
+                  {item.image_url ? (
+                    <>
+                      <img src={item.image_url} alt={item.filename} className="object-contain max-w-full max-h-full group-hover:scale-105 transition-transform duration-500" />
+                      
+                      {/* Overlay SVG drawing annotations */}
+                      <svg 
+                        viewBox={`0 0 ${item.width || 640} ${item.height || 480}`} 
+                        preserveAspectRatio="xMidYMid meet"
+                        className="absolute inset-0 w-full h-full pointer-events-none"
+                      >
+                        {masks.map((mask, mIdx) => {
+                          const color = getClassColor(mask.label);
+                          const [x1, y1] = mask.xyxy || (mask.points && mask.points[0]) || [0, 0];
+                          return (
+                            <g key={`mask-${mIdx}`}>
+                              <polygon
+                                points={mask.points.map(p => p.join(',')).join(' ')}
+                                fill={color}
+                                fillOpacity="0.25"
+                                stroke={color}
+                                strokeWidth="2"
+                              />
+                              <text
+                                x={x1 + 4}
+                                y={y1 > 18 ? y1 - 4 : y1 + 14}
+                                fill={color}
+                                fontSize={Math.max(12, Math.round((item.height || 480) * 0.05))}
+                                fontWeight="black"
+                                style={{ textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}
+                              >
+                                {mask.label.toUpperCase()}
+                              </text>
+                            </g>
+                          );
+                        })}
+
+                        {boxes.map((box, bIdx) => {
+                          const color = getClassColor(box.label);
+                          const [x1, y1, x2, y2] = box.xyxy;
+                          return (
+                            <g key={`box-${bIdx}`}>
+                              <rect
+                                x={x1}
+                                y={y1}
+                                width={x2 - x1}
+                                height={y2 - y1}
+                                fill="none"
+                                stroke={color}
+                                strokeWidth="2.5"
+                                strokeDasharray="3,3"
+                              />
+                              <text
+                                x={x1 + 4}
+                                y={y1 > 18 ? y1 - 4 : y1 + 14}
+                                fill={color}
+                                fontSize={Math.max(12, Math.round((item.height || 480) * 0.05))}
+                                fontWeight="black"
+                                style={{ textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}
+                              >
+                                {box.label.toUpperCase()}
+                              </text>
+                            </g>
+                          );
+                        })}
+                      </svg>
+                    </>
+                  ) : (
+                    <span className="text-xs text-slate-600">No Preview</span>
+                  )}
+                  
+                  {/* Hover Edit Overlay */}
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity duration-300">
+                    <span className="bg-red-500 hover:bg-red-600 text-white font-bold text-xs uppercase px-4 py-2 rounded-lg flex items-center gap-2 shadow-lg transform translate-y-2 group-hover:translate-y-0 transition-all duration-300">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                      </svg>
+                      Modify Labels
+                    </span>
+                  </div>
+
+                  <div className="absolute top-2 right-2 bg-slate-900/90 backdrop-blur-md border border-white/10 px-2 py-0.5 rounded text-[10px] font-bold text-white uppercase font-mono">
+                    {item.num_labels} {item.num_labels === 1 ? 'Object' : 'Objects'}
+                  </div>
+                </div>
+
+                <div className="p-4 flex-1 flex flex-col justify-between gap-4">
+                  <div className="space-y-1">
+                    <h4 className="text-xs font-bold text-white truncate font-mono" title={item.filename}>{item.filename}</h4>
+                    <p className="text-[10px] text-slate-500 truncate">Dimensions: {item.width} x {item.height}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setViewingLabels(item)}
+                      className="flex-1 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-white font-bold text-[10px] uppercase tracking-wider transition-colors"
+                    >
+                      View Raw Text
+                    </button>
+                    <button
+                      onClick={() => handleEditClick(item)}
+                      className="px-3 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 rounded-lg text-emerald-400 hover:text-emerald-300 text-[10px] font-bold uppercase tracking-wider transition-colors"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => handleDelete(item.filename, item.model_name)}
+                      className="py-2 px-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg text-red-400 hover:text-red-300 transition-colors"
+                      title="Delete Sample"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div className="p-4 flex-1 flex flex-col justify-between gap-4">
-                <div className="space-y-1">
-                  <h4 className="text-xs font-bold text-white truncate font-mono" title={item.filename}>{item.filename}</h4>
-                  <p className="text-[10px] text-slate-500 truncate">Path: {item.filename}</p>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setViewingLabels(item)}
-                    className="flex-1 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-white font-bold text-[10px] uppercase tracking-wider transition-colors"
-                  >
-                    View Labels
-                  </button>
-                  <button
-                    onClick={() => handleDelete(item.filename)}
-                    className="py-2 px-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg text-red-400 hover:text-red-300 transition-colors"
-                    title="Delete Sample"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -879,6 +1162,8 @@ export default function App() {
   const [vtModelClass, setVtModelClass] = useState('4cls');
   const [currentModelUsed, setCurrentModelUsed] = useState('');
   const [modelClassNames, setModelClassNames] = useState([]);
+  const [detectedModelName, setDetectedModelName] = useState('');
+  const [studioClassNames, setStudioClassNames] = useState([]);
 
   // Chat History State
   const [chats, setChats] = useState(() => {
@@ -1113,6 +1398,8 @@ export default function App() {
         };
         reader.readAsDataURL(file);
         setDetections([]);
+        setDetectedModelName('');
+        setStudioClassNames([]);
       }
     }
   };
@@ -1138,7 +1425,7 @@ export default function App() {
       const inspectionTypeParam = analysisModel === 'Visual (Photo)' ? 'visual' : analysisModel === 'Radiographic (X-Ray)' ? 'radio' : 'auto';
       const modelTypeParam = analysisModel === 'Visual (Photo)' ? (vtModelClass || '4cls') : (rtModelClass || '4cls');
 
-      const res = await fetch(`${API_URL}/api/analyze?model_type=${modelTypeParam}&inspection_type=${inspectionTypeParam}`, {
+      const res = await fetch(`${API_URL}/api/analyze?model_type=${modelTypeParam}&inspection_type=${inspectionTypeParam}&rt_model_type=${rtModelClass || '4cls'}&vt_model_type=${vtModelClass || '4cls'}`, {
         method: "POST",
         headers: { 
           "x-user-id": userId || "Anonymous"
@@ -1154,10 +1441,15 @@ export default function App() {
       const responseData = await res.json();
       const newDetections = Array.isArray(responseData.detections) ? responseData.detections : [];
       const modelUsed = responseData.model_used || "WeldSight-4CLS";
+      const modelName = responseData.model_name || "";
       setDetections(newDetections);
       setCurrentModelUsed(modelUsed);
+      setDetectedModelName(modelName);
       if (Array.isArray(responseData.class_names)) {
         setModelClassNames(responseData.class_names);
+        setStudioClassNames(responseData.class_names);
+      } else {
+        setStudioClassNames([]);
       }
 
       // Auto-trigger AI summary
@@ -1699,6 +1991,7 @@ export default function App() {
           getColorForLabel, triggerAISummary, generatePDFReport, sendMessage, DEFECT_STANDARDS, API_URL, isProcessing,
           yoloLatency, radioLatency, qwenLatency, yoloHistory, radioHistory, qwenHistory, showAnnotations, setShowAnnotations, imageFile, setImageFile, runAnalysis, handleImageSelect, focusOnDefect, masks, boxes,
           analysisModel, setAnalysisModel, rtModelClass, setRtModelClass, vtModelClass, setVtModelClass, currentModelUsed, setCurrentModelUsed, modelClassNames, setModelClassNames,
+          detectedModelName, setDetectedModelName, studioClassNames, setStudioClassNames,
           isTrafficModalOpen, setIsTrafficModalOpen, selectedTraffic, setSelectedTraffic, chats, setChats, currentChatId, setCurrentChatId, showHistoryList, setShowHistoryList, 
           chatInput, setChatInput, typingChatId, setTypingChatId, stopTypingRef, chatEndRef, chatContainerRef, isAtBottomRef, currentChat, handleChatScroll, startNewChat, deleteChat, handleDecision,
           isRegisterMode, setIsRegisterMode, handleRegister,
@@ -1719,6 +2012,7 @@ function AppContent({
   getColorForLabel, triggerAISummary, generatePDFReport, sendMessage, DEFECT_STANDARDS, API_URL, isProcessing,
   yoloLatency, radioLatency, qwenLatency, yoloHistory, radioHistory, qwenHistory, showAnnotations, setShowAnnotations, imageFile, setImageFile, runAnalysis, handleImageSelect, focusOnDefect, masks, boxes,
   analysisModel, setAnalysisModel, rtModelClass, setRtModelClass, vtModelClass, setVtModelClass, currentModelUsed, setCurrentModelUsed, modelClassNames, setModelClassNames,
+  detectedModelName, setDetectedModelName, studioClassNames, setStudioClassNames,
   isTrafficModalOpen, setIsTrafficModalOpen, selectedTraffic, setSelectedTraffic, chats, setChats, currentChatId, setCurrentChatId, showHistoryList, setShowHistoryList, 
   chatInput, setChatInput, typingChatId, setTypingChatId, stopTypingRef, chatEndRef, chatContainerRef, isAtBottomRef, currentChat, handleChatScroll, startNewChat, deleteChat, handleDecision,
   isRegisterMode, setIsRegisterMode, handleRegister,
@@ -1733,6 +2027,24 @@ function AppContent({
   // Correction Studio States & Refs
   const [isRetrainStudioOpen, setIsRetrainStudioOpen] = useState(false);
   const [retrainBoxes, setRetrainBoxes] = useState([]);
+
+  const getComputedModelName = () => {
+    const isVT = analysisModel === 'Visual (Photo)' || 
+      (analysisModel === 'Auto-Detect' && (
+        currentModelUsed.toLowerCase().includes('visual') || 
+        currentModelUsed.toLowerCase().includes('vt')
+      ));
+    const mClass = isVT ? (vtModelClass || '4cls') : (rtModelClass || '4cls');
+    
+    if (isVT) {
+      return mClass === 'binary' ? 'visual_binary' : 'visual_6classes';
+    } else {
+      if (mClass === 'binary') return 'radio_binary';
+      if (mClass === '4cls') return 'radio_4classes';
+      if (mClass === '7cls') return 'radio_7classes';
+      return 'radio_4classes';
+    }
+  };
   const [retrainIsDrawing, setRetrainIsDrawing] = useState(false);
   const [retrainStartPos, setRetrainStartPos] = useState({ x: 0, y: 0 });
   const [retrainCurrentPos, setRetrainCurrentPos] = useState({ x: 0, y: 0 });
@@ -1744,7 +2056,7 @@ function AppContent({
   const retrainSvgRef = useRef(null);
 
   const openRetrainStudio = () => {
-    const sourceDetections = isVisualInspection ? filteredMasks : filteredBoxes;
+    const sourceDetections = filteredDetections;
     setRetrainBoxes(sourceDetections.map(det => ({ ...det, hidden: false })));
     
     // Set default class based on the chosen model's classes
@@ -1850,44 +2162,10 @@ function AppContent({
     const newDetections = [];
     retrainBoxes.forEach(item => {
       if (item.hidden) return;
-      
-      if (item.type === 'mask') {
-        newDetections.push({
-          ...item,
-          confidence: item.confidence ?? 1.0
-        });
-        
-        if (item.xyxy) {
-          newDetections.push({
-            type: 'box',
-            label: item.label,
-            confidence: item.confidence ?? 1.0,
-            xyxy: item.xyxy
-          });
-        }
-      } else {
-        newDetections.push({
-          ...item,
-          confidence: item.confidence ?? 1.0
-        });
-        
-        if (isVisualInspection && item.xyxy) {
-          const [x1, y1, x2, y2] = item.xyxy;
-          const points = [
-            [x1, y1],
-            [x2, y1],
-            [x2, y2],
-            [x1, y2]
-          ];
-          newDetections.push({
-            type: 'mask',
-            label: item.label,
-            confidence: item.confidence ?? 1.0,
-            points: points,
-            xyxy: item.xyxy
-          });
-        }
-      }
+      newDetections.push({
+        ...item,
+        confidence: item.confidence ?? 1.0
+      });
     });
     setDetections(newDetections);
     setIsRetrainStudioOpen(false);
@@ -1896,6 +2174,25 @@ function AppContent({
   const saveRetrainData = async () => {
     setIsSavingRetrain(true);
     try {
+      const isVT = analysisModel === 'Visual (Photo)' || 
+        (analysisModel === 'Auto-Detect' && (
+          currentModelUsed.toLowerCase().includes('visual') || 
+          currentModelUsed.toLowerCase().includes('vt')
+        ));
+      const mClass = isVT ? (vtModelClass || '4cls') : (rtModelClass || '4cls');
+      
+      let modelName = detectedModelName;
+      if (!modelName) {
+        if (isVT) {
+          modelName = mClass === 'binary' ? 'visual_binary' : 'visual_6classes';
+        } else {
+          if (mClass === 'binary') modelName = 'radio_binary';
+          else if (mClass === '4cls') modelName = 'radio_4classes';
+          else if (mClass === '7cls') modelName = 'radio_7classes';
+          else modelName = 'radio_4classes';
+        }
+      }
+
       const payload = {
         image_base64: imagePreview,
         filename: imageFile ? imageFile.name : "corrected_image.jpg",
@@ -1903,7 +2200,9 @@ function AppContent({
           label: box.label,
           xyxy: box.xyxy,
           points: box.points
-        }))
+        })),
+        class_names: getRetrainClasses ? getRetrainClasses().map(c => c.id) : [],
+        model_name: modelName
       };
       
       const res = await fetch(`${API_URL}/api/retrain/save`, {
@@ -1946,8 +2245,9 @@ function AppContent({
     ));
 
   const getRetrainClasses = () => {
-    // If the backend returned actual class names, use them directly
-    if (modelClassNames && modelClassNames.length > 0) {
+    // Check if we have active studio class names (from scan or from dataset edit)
+    const activeNames = (studioClassNames && studioClassNames.length > 0) ? studioClassNames : modelClassNames;
+    if (activeNames && activeNames.length > 0) {
       const dynamicPalette = [
         { color: "#ef4444", rgb: "239,68,68" },
         { color: "#3b82f6", rgb: "59,130,246" },
@@ -1958,8 +2258,7 @@ function AppContent({
         { color: "#14b8a6", rgb: "20,184,166" },
         { color: "#64748b", rgb: "100,116,139" }
       ];
-      return modelClassNames.map((name, i) => {
-        // Try to find a matching entry in the master lookup table
+      return activeNames.map((name, i) => {
         const existing = RETRAIN_CLASSES.find(c => c.id === name);
         const pal = dynamicPalette[i % dynamicPalette.length];
         return {
@@ -1971,46 +2270,44 @@ function AppContent({
       });
     }
 
-    // Fallback: use hardcoded defaults based on model selection
-    if (isVisualInspection) {
-      if (vtModelClass === 'binary') {
-        return [
-          { id: "defect", name: "Defect", color: "#ef4444", rgb: "239,68,68" },
-          { id: "good_weld", name: "Good Weld", color: "#10b981", rgb: "16,185,129" }
-        ];
-      } else {
-        return [
-          { id: "crack", name: "Crack", color: "#ef4444", rgb: "239,68,68" },
-          { id: "good_weld", name: "Good Weld", color: "#10b981", rgb: "16,185,129" },
-          { id: "bad_weld", name: "Bad Weld", color: "#f59e0b", rgb: "245,158,11" },
-          { id: "porosity", name: "Porosity", color: "#3b82f6", rgb: "59,130,246" },
-          { id: "slag", name: "Slag", color: "#8b5cf6", rgb: "139,92,246" },
-          { id: "undercut", name: "Undercut", color: "#ec4899", rgb: "236,72,153" }
-        ];
-      }
+    // Fallback: check target model name
+    const activeModel = detectedModelName || getComputedModelName();
+    if (activeModel === 'visual_binary') {
+      return [
+        { id: "defect", name: "Defect", color: "#ef4444", rgb: "239,68,68" },
+        { id: "good_weld", name: "Good Weld", color: "#10b981", rgb: "16,185,129" }
+      ];
+    } else if (activeModel === 'visual_6classes') {
+      return [
+        { id: "crack", name: "Crack", color: "#ef4444", rgb: "239,68,68" },
+        { id: "good_weld", name: "Good Weld", color: "#10b981", rgb: "16,185,129" },
+        { id: "bad_weld", name: "Bad Weld", color: "#f59e0b", rgb: "245,158,11" },
+        { id: "porosity", name: "Porosity", color: "#3b82f6", rgb: "59,130,246" },
+        { id: "slag", name: "Slag", color: "#8b5cf6", rgb: "139,92,246" },
+        { id: "undercut", name: "Undercut", color: "#ec4899", rgb: "236,72,153" }
+      ];
+    } else if (activeModel === 'radio_binary') {
+      return [
+        { id: "defect", name: "Defect", color: "#ef4444", rgb: "239,68,68" }
+      ];
+    } else if (activeModel === 'radio_7classes') {
+      return [
+        { id: "crack", name: "Crack", color: "#ef4444", rgb: "239,68,68" },
+        { id: "porosity", name: "Porosity", color: "#3b82f6", rgb: "59,130,246" },
+        { id: "lack_of_union", name: "Lack of Union", color: "#f59e0b", rgb: "245,158,11" },
+        { id: "slag", name: "Slag inclusion", color: "#10b981", rgb: "16,185,129" },
+        { id: "undercut", name: "Undercut", color: "#8b5cf6", rgb: "139,92,246" },
+        { id: "inclusion", name: "Inclusion", color: "#ec4899", rgb: "236,72,153" },
+        { id: "spatter", name: "Spatter", color: "#64748b", rgb: "100,116,139" }
+      ];
     } else {
-      if (rtModelClass === 'binary') {
-        return [
-          { id: "defect", name: "Defect", color: "#ef4444", rgb: "239,68,68" }
-        ];
-      } else if (rtModelClass === '4cls') {
-        return [
-          { id: "crack", name: "Crack", color: "#ef4444", rgb: "239,68,68" },
-          { id: "volumetric", name: "Volumetric", color: "#3b82f6", rgb: "59,130,246" },
-          { id: "union", name: "Union", color: "#f59e0b", rgb: "245,158,11" },
-          { id: "surface", name: "Surface", color: "#8b5cf6", rgb: "139,92,246" }
-        ];
-      } else {
-        return [
-          { id: "crack", name: "Crack", color: "#ef4444", rgb: "239,68,68" },
-          { id: "porosity", name: "Porosity", color: "#3b82f6", rgb: "59,130,246" },
-          { id: "lack_of_union", name: "Lack of Union", color: "#f59e0b", rgb: "245,158,11" },
-          { id: "slag", name: "Slag inclusion", color: "#10b981", rgb: "16,185,129" },
-          { id: "undercut", name: "Undercut", color: "#8b5cf6", rgb: "139,92,246" },
-          { id: "inclusion", name: "Inclusion", color: "#ec4899", rgb: "236,72,153" },
-          { id: "spatter", name: "Spatter", color: "#64748b", rgb: "100,116,139" }
-        ];
-      }
+      // radio_4classes
+      return [
+        { id: "crack", name: "Crack", color: "#ef4444", rgb: "239,68,68" },
+        { id: "volumetric", name: "Volumetric", color: "#3b82f6", rgb: "59,130,246" },
+        { id: "union", name: "Union", color: "#f59e0b", rgb: "245,158,11" },
+        { id: "surface", name: "Surface", color: "#8b5cf6", rgb: "139,92,246" }
+      ];
     }
   };
 
@@ -2834,7 +3131,7 @@ function AppContent({
                         );
                       })}
                       {/* Render Boxes (Labels) */}
-                      {filteredBoxes.map((box, idx) => {
+                      {filteredDetections.map((box, idx) => {
                         if (!box.xyxy) return null;
                         const [x1, y1, x2, y2] = box.xyxy;
                         
@@ -2853,8 +3150,8 @@ function AppContent({
 
                         return (
                           <g key={`box-${idx}`} style={{ cursor: 'pointer' }}>
-                            {/* Bounding Box Defect Outline — hidden for Visual inspections (mask-only) */}
-                            {!isVisualInspection && (
+                            {/* Bounding Box Defect Outline — only for box detections */}
+                            {box.type !== 'mask' && (
                               <rect
                                 x={x1}
                                 y={y1}
@@ -2898,7 +3195,7 @@ function AppContent({
             <div className="glass-card p-5 flex-1 flex flex-col max-h-[800px]">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Detection Results</h3>
-                <span className="bg-white/10 text-white text-xs py-1 px-2 rounded-md font-mono">{filteredBoxes.length}</span>
+                <span className="bg-white/10 text-white text-xs py-1 px-2 rounded-md font-mono">{filteredDetections.length}</span>
               </div>
               
               <div className="flex-1 overflow-y-auto pr-2 space-y-3">
@@ -2906,12 +3203,12 @@ function AppContent({
                   <div className="text-center text-slate-500 text-sm mt-8">
                     {imagePreview ? "Ready to analyze." : "Analysis results will appear here."}
                   </div>
-                ) : filteredBoxes.length === 0 ? (
+                ) : filteredDetections.length === 0 ? (
                   <div className="text-center text-emerald-400 text-sm mt-8 bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/20">
                     No defects found. Quality accepted.
                   </div>
                 ) : (
-                  filteredBoxes.map((det, idx) => {
+                  filteredDetections.map((det, idx) => {
                     const confPercent = (det.confidence * 100).toFixed(1);
                     const colorObj = getColorForLabel(det.label);
                     
@@ -2951,7 +3248,7 @@ function AppContent({
                 )}
               </div>
 
-              {detections.length > 0 && (
+              {imagePreview && (
                 <button
                   type="button"
                   onClick={openRetrainStudio}
@@ -2960,7 +3257,7 @@ function AppContent({
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                   </svg>
-                  Correct Defects
+                  Correction Studio
                 </button>
               )}
 
@@ -3317,7 +3614,18 @@ function AppContent({
           <AnalyticsView API_URL={API_URL} inspections={inspections} />
         ) : activeTab === 'Retrain Dataset' ? (
           <motion.div initial={{opacity:0, y:10}} animate={{opacity:1, y:0}} className="flex-1 w-full">
-            <RetrainDatasetView API_URL={API_URL} />
+            <RetrainDatasetView 
+              API_URL={API_URL} 
+              setImagePreview={setImagePreview}
+              setRetrainBoxes={setRetrainBoxes}
+              setIsRetrainStudioOpen={setIsRetrainStudioOpen}
+              setImageFile={setImageFile}
+              setRetrainClass={setRetrainClass}
+              setRetrainDrawMode={setRetrainDrawMode}
+              getRetrainClasses={getRetrainClasses}
+              setDetectedModelName={setDetectedModelName}
+              setStudioClassNames={setStudioClassNames}
+            />
           </motion.div>
         ) : activeTab === 'Audit' ? (
           <AuditLogView API_URL={API_URL} />
@@ -3688,7 +3996,7 @@ function AppContent({
                               );
                             })}
                             {/* Render Boxes */}
-                            {filteredBoxes.map((box, idx) => {
+                            {filteredDetections.map((box, idx) => {
                               if (!box.xyxy) return null;
                               const [x1, y1, x2, y2] = box.xyxy;
                               const w = x2 - x1;
@@ -3703,13 +4011,15 @@ function AppContent({
                               const yPos = Math.max(0, y1 - textHeight);
                               return (
                                 <g key={`rep-box-${idx}`}>
-                                  <rect
-                                    x={x1} y={y1} width={w} height={h}
-                                    fill={`rgba(${colorObj.rgb}, 0.2)`}
-                                    stroke={colorObj.hex}
-                                    strokeWidth="2"
-                                    style={{ filter: `drop-shadow(0 0 3px rgba(${colorObj.rgb}, 0.5))` }}
-                                  />
+                                  {box.type !== 'mask' && (
+                                    <rect
+                                      x={x1} y={y1} width={w} height={h}
+                                      fill={`rgba(${colorObj.rgb}, 0.2)`}
+                                      stroke={colorObj.hex}
+                                      strokeWidth="2"
+                                      style={{ filter: `drop-shadow(0 0 3px rgba(${colorObj.rgb}, 0.5))` }}
+                                    />
+                                  )}
                                   <rect
                                     x={x1} y={yPos} width={textWidth} height={textHeight} rx="3"
                                     fill={`rgba(${colorObj.rgb}, 0.95)`}
@@ -3905,6 +4215,10 @@ function AppContent({
                   <span className="text-[10px] font-bold font-mono bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md border border-slate-300/50">
                     {retrainBoxes.length} {retrainBoxes.length === 1 ? 'LABEL' : 'LABELS'}
                   </span>
+                  <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-bold bg-red-500/10 text-red-600 border border-red-500/20 px-2.5 py-0.5 rounded-md">
+                    <span>Target Model:</span>
+                    <span className="font-mono">{RETRAIN_MODELS.find(m => m.id === (detectedModelName || getComputedModelName()))?.name || (detectedModelName || getComputedModelName())}</span>
+                  </div>
                 </div>
                 <button 
                   type="button"
@@ -3942,15 +4256,15 @@ function AppContent({
                         {/* Render drawn labels */}
                         {retrainBoxes.map((box, idx) => {
                           if (box.hidden) return null;
-                          const colorClass = RETRAIN_CLASSES.find(c => c.id === box.label) || { color: "#ef4444", rgb: "239,68,68" };
+                          const colorObj = getColorForLabel(box.label);
                           
                           if (box.type === "mask" && box.points) {
                             return (
                               <g key={`retrain-box-${idx}`}>
                                 <polygon
                                   points={box.points.map(pt => pt.join(',')).join(' ')}
-                                  fill={`rgba(${colorClass.rgb}, 0.25)`}
-                                  stroke={colorClass.color}
+                                  fill={`rgba(${colorObj.rgb}, 0.25)`}
+                                  stroke={colorObj.hex}
                                   strokeWidth="2"
                                 />
                                 {box.xyxy && (
@@ -3960,7 +4274,7 @@ function AppContent({
                                       y={Math.max(0, box.xyxy[1] - 15)}
                                       width={box.label.length * 6 + 12}
                                       height={15}
-                                      fill={colorClass.color}
+                                      fill={colorObj.hex}
                                       rx="2"
                                     />
                                     <text
@@ -3988,8 +4302,8 @@ function AppContent({
                                   y={y1}
                                   width={w}
                                   height={h}
-                                  fill={`rgba(${colorClass.rgb}, 0.25)`}
-                                  stroke={colorClass.color}
+                                  fill={`rgba(${colorObj.rgb}, 0.25)`}
+                                  stroke={colorObj.hex}
                                   strokeWidth="2"
                                 />
                                 <rect
@@ -3997,7 +4311,7 @@ function AppContent({
                                   y={Math.max(0, y1 - 15)}
                                   width={box.label.length * 6 + 12}
                                   height={15}
-                                  fill={colorClass.color}
+                                  fill={colorObj.hex}
                                   rx="2"
                                 />
                                 <text
@@ -4092,16 +4406,16 @@ function AppContent({
                     <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex-shrink-0">Active Labels ({retrainBoxes.length})</h3>
                     <div className="space-y-2 flex-1 overflow-y-auto pr-1">
                       {retrainBoxes.map((box, idx) => {
-                        const colorClass = RETRAIN_CLASSES.find(c => c.id === box.label) || { color: "#ef4444", name: box.label };
+                        const colorObj = getColorForLabel(box.label);
                         return (
                           <div 
                             key={idx}
                             className={`flex items-center justify-between p-3 rounded-xl border transition-all ${box.hidden ? 'bg-slate-100 border-slate-200/60 opacity-50' : 'bg-white border-slate-200 hover:border-slate-300 shadow-sm'}`}
                           >
                             <div className="flex items-center gap-2.5 min-w-0">
-                              <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: colorClass.color }} />
+                              <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: colorObj.hex }} />
                               <div className="truncate">
-                                <div className="text-xs font-bold text-slate-700 capitalize truncate">{colorClass.name.replace('_', ' ')}</div>
+                                <div className="text-xs font-bold text-slate-700 capitalize truncate">{box.label.replace('_', ' ')}</div>
                                 <div className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">{box.type === 'mask' ? 'segmentation' : 'bounding box'}</div>
                               </div>
                             </div>
@@ -4143,6 +4457,20 @@ function AppContent({
 
                   {/* Actions Footer */}
                   <div className="p-4 border-t border-slate-200 bg-slate-50 space-y-2 flex-shrink-0">
+                    <div className="bg-slate-100 border border-slate-200 rounded-lg p-2.5 mb-1 text-[11px] text-slate-600">
+                      <div className="flex items-center justify-between font-bold text-slate-500 text-[9px] uppercase tracking-wider mb-1">
+                        <span>Save Location</span>
+                        <span className="text-red-500 font-mono text-[8px] bg-red-50 px-1 py-0.5 rounded border border-red-100 uppercase">
+                          {detectedModelName ? "Detected Model" : "UI Configuration"}
+                        </span>
+                      </div>
+                      <div className="font-bold text-slate-800">
+                        {RETRAIN_MODELS.find(m => m.id === (detectedModelName || getComputedModelName()))?.name || (detectedModelName || getComputedModelName())}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5 truncate">
+                        active_learning_dataset/{detectedModelName || getComputedModelName()}/
+                      </div>
+                    </div>
                     <button
                       type="button"
                       onClick={saveRetrainData}

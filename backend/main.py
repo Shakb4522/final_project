@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Query
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Query, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -211,7 +211,9 @@ async def analyze_image(
     request: Request,
     file: UploadFile = File(...),
     model_type: str = Query("4cls"),
-    inspection_type: str = Query("auto")
+    inspection_type: str = Query("auto"),
+    rt_model_type: Optional[str] = Query(None),
+    vt_model_type: Optional[str] = Query(None)
 ):
     if model_type not in ["4cls", "binary", "7cls"]:
         model_type = "4cls"
@@ -226,8 +228,18 @@ async def analyze_image(
         if resolved_type == "auto":
             resolved_type = classify_image_type(tmp_path)
 
+        # Resolve correct model class based on actual image classification
+        if resolved_type == "radio":
+            m_type = rt_model_type if rt_model_type else model_type
+        else:
+            m_type = vt_model_type if vt_model_type else model_type
+
+        # Validate m_type
+        if m_type not in ["4cls", "binary", "7cls"]:
+            m_type = "4cls"
+
         # Download and load the model on-demand
-        model = download_and_load_model(resolved_type, model_type)
+        model = download_and_load_model(resolved_type, m_type)
 
         if resolved_type == "radio":
             preprocess_radio_image(tmp_path)
@@ -236,9 +248,9 @@ async def analyze_image(
             b64_data = base64.b64encode(f.read()).decode("utf-8")
         preprocessed_image_url = f"data:image/jpeg;base64,{b64_data}"
 
-        if model_type == "4cls":
+        if m_type == "4cls":
             imgsz = 1280
-        elif model_type == "7cls":
+        elif m_type == "7cls":
             imgsz = 640
         else:
             imgsz = 1024
@@ -267,16 +279,11 @@ async def analyze_image(
                 x1, y1, x2, y2 = [float(v) for v in box.xyxy[0].tolist()]
                 label  = class_names.get(cls_id, f"class_{cls_id}")
 
-                detections.append({
-                    "type":       "box",
-                    "label":      label,
-                    "confidence": conf,
-                    "xyxy":       [x1, y1, x2, y2],
-                })
-
+                has_mask = False
                 if masks is not None and i < len(masks.xy):
                     poly = masks.xy[i]
                     if len(poly) >= 3:
+                        has_mask = True
                         points = [[float(p[0]), float(p[1])] for p in poly]
                         detections.append({
                             "type":       "mask",
@@ -286,14 +293,34 @@ async def analyze_image(
                             "xyxy":       [x1, y1, x2, y2],
                         })
 
-        model_version = f"WeldSight-VT-Visual" if resolved_type == "visual" else MODEL_VERSIONS.get(model_type, model_type)
+                if not has_mask:
+                    detections.append({
+                        "type":       "box",
+                        "label":      label,
+                        "confidence": conf,
+                        "xyxy":       [x1, y1, x2, y2],
+                    })
+
+        model_version = f"WeldSight-VT-Visual" if resolved_type == "visual" else MODEL_VERSIONS.get(m_type, m_type)
 
         # Log usage in our DB
-        await log_model_usage(request, model_type)
+        await log_model_usage(request, m_type)
+
+        # Determine target retrain model name
+        if resolved_type == "visual":
+            model_name = "visual_binary" if m_type == "binary" else "visual_6classes"
+        else:
+            if m_type == "binary":
+                model_name = "radio_binary"
+            elif m_type == "7cls":
+                model_name = "radio_7classes"
+            else:
+                model_name = "radio_4classes"
 
         return {
             "detections": detections,
             "model_used": model_version,
+            "model_name": model_name,
             "preprocessed_image": preprocessed_image_url,
             "class_names": list(class_names.values())
         }
@@ -731,19 +758,40 @@ class RetrainSaveRequest(BaseModel):
     image_base64: str
     filename: str
     labels: List[CorrectionLabel]
+    class_names: Optional[List[str]] = None
+    model_name: Optional[str] = "radio_4classes"
 
 @app.post("/api/retrain/save")
 async def save_retrain_data(req: RetrainSaveRequest):
     try:
+        # Determine target model directory
+        m_name = req.model_name
+        if not m_name or m_name not in ["radio_binary", "radio_4classes", "radio_7classes", "visual_binary", "visual_6classes"]:
+            fn = req.filename.lower()
+            if "vt" in fn or "visual" in fn:
+                m_name = "visual_6classes"
+            else:
+                m_name = "radio_4classes"
+
+        m_images_dir = os.path.join(DATASET_DIR, m_name, "images")
+        m_labels_dir = os.path.join(DATASET_DIR, m_name, "labels")
+
         # Clean and construct filenames
         safe_filename = os.path.basename(req.filename)
         name_part, ext_part = os.path.splitext(safe_filename)
         if not ext_part.lower() in [".jpg", ".jpeg", ".png", ".webp"]:
             ext_part = ".jpg"
         
-        timestamp = int(time.time() * 1000)
-        unique_name = f"{name_part}_{timestamp}{ext_part}"
-        label_name = f"{name_part}_{timestamp}.txt"
+        import re
+        if re.search(r'_\d+$', name_part):
+            unique_name = f"{name_part}{ext_part}"
+            label_name = f"{name_part}.txt"
+            json_name = f"{name_part}.json"
+        else:
+            timestamp = int(time.time() * 1000)
+            unique_name = f"{name_part}_{timestamp}{ext_part}"
+            label_name = f"{name_part}_{timestamp}.txt"
+            json_name = f"{name_part}_{timestamp}.json"
 
         # Decode base64 image
         img_data_str = req.image_base64
@@ -761,35 +809,56 @@ async def save_retrain_data(req: RetrainSaveRequest):
         img_h, img_w = img.shape[:2]
 
         # Ensure directories exist
-        os.makedirs(IMAGES_DIR, exist_ok=True)
-        os.makedirs(LABELS_DIR, exist_ok=True)
+        os.makedirs(m_images_dir, exist_ok=True)
+        os.makedirs(m_labels_dir, exist_ok=True)
 
         # Save image file
-        image_path = os.path.join(IMAGES_DIR, unique_name)
+        image_path = os.path.join(m_images_dir, unique_name)
         with open(image_path, "wb") as f:
             f.write(img_bytes)
 
-        # Map to class IDs
-        CLASS_MAP = {
-            "porosity": 0,
-            "slag": 1,
-            "crack": 2,
-            "tungsten": 3,
-            "undercut": 4,
-            "lack_of_fusion": 5,
-            "lack_of_penetration": 6,
-            "spatter": 7,
-            "volumetric": 0,
-            "union": 5,
-            "surface": 4
-        }
+        # Save sidecar metadata JSON file
+        json_path = os.path.join(m_labels_dir, json_name)
+        final_classes = req.class_names if req.class_names else ["porosity", "slag", "crack", "tungsten", "undercut", "lack_of_fusion", "lack_of_penetration", "spatter"]
+        
+        import json
+        with open(json_path, "w") as f_json:
+            json.dump({"class_names": final_classes}, f_json, indent=2)
 
         # Save YOLO label file
-        label_path = os.path.join(LABELS_DIR, label_name)
+        label_path = os.path.join(m_labels_dir, label_name)
         with open(label_path, "w") as f_label:
             for item in req.labels:
                 lbl_clean = item.label.lower().replace(" ", "_")
-                class_id = CLASS_MAP.get(lbl_clean, 0)
+                
+                CLASS_MAP = {
+                    "porosity": 0,
+                    "slag": 1,
+                    "crack": 2,
+                    "tungsten": 3,
+                    "undercut": 4,
+                    "lack_of_fusion": 5,
+                    "lack_of_penetration": 6,
+                    "spatter": 7,
+                    "volumetric": 0,
+                    "union": 5,
+                    "surface": 4,
+                    "defect": 8,
+                    "good_weld": 9,
+                    "bad_weld": 10
+                }
+
+                if req.class_names:
+                    try:
+                        clean_names = [c.lower().replace(" ", "_") for c in req.class_names]
+                        if lbl_clean in clean_names:
+                            class_id = clean_names.index(lbl_clean)
+                        else:
+                            class_id = CLASS_MAP.get(lbl_clean, 0)
+                    except Exception:
+                        class_id = CLASS_MAP.get(lbl_clean, 0)
+                else:
+                    class_id = CLASS_MAP.get(lbl_clean, 0)
 
                 # If we have polygon points
                 if item.points and len(item.points) >= 3:
@@ -804,19 +873,17 @@ async def save_retrain_data(req: RetrainSaveRequest):
                 # If we only have bounding box xyxy
                 elif item.xyxy and len(item.xyxy) == 4:
                     x1, y1, x2, y2 = item.xyxy
-                    pts = [
-                        [x1, y1],
-                        [x2, y1],
-                        [x2, y2],
-                        [x1, y2]
-                    ]
-                    norm_pts = []
-                    for pt in pts:
-                        px = min(max(pt[0] / img_w, 0.0), 1.0)
-                        py = min(max(pt[1] / img_h, 0.0), 1.0)
-                        norm_pts.append(f"{px:.6f} {py:.6f}")
-                    pts_str = " ".join(norm_pts)
-                    f_label.write(f"{class_id} {pts_str}\n")
+                    w_box = x2 - x1
+                    h_box = y2 - y1
+                    x_center = x1 + w_box / 2.0
+                    y_center = y1 + h_box / 2.0
+                    
+                    x_center_norm = min(max(x_center / img_w, 0.0), 1.0)
+                    y_center_norm = min(max(y_center / img_h, 0.0), 1.0)
+                    w_norm = min(max(w_box / img_w, 0.0), 1.0)
+                    h_norm = min(max(h_box / img_h, 0.0), 1.0)
+                    
+                    f_label.write(f"{class_id} {x_center_norm:.6f} {y_center_norm:.6f} {w_norm:.6f} {h_norm:.6f}\n")
 
         return {
             "status": "success",
@@ -828,66 +895,200 @@ async def save_retrain_data(req: RetrainSaveRequest):
         print(f"[Retrain Save Error] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def scan_directory(images_dir, labels_dir, model_name):
+    if not os.path.exists(images_dir):
+        return []
+    items = []
+    for filename in os.listdir(images_dir):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+            name_part, _ = os.path.splitext(filename)
+            
+            label_filename = f"{name_part}.txt"
+            label_path = os.path.join(labels_dir, label_filename)
+            num_labels = 0
+            label_contents = ""
+            
+            if os.path.exists(label_path):
+                try:
+                    with open(label_path, "r") as f:
+                        lines = f.readlines()
+                        num_labels = len(lines)
+                        label_contents = "".join(lines)
+                except Exception:
+                    pass
+            
+            class_names = []
+            json_filename = f"{name_part}.json"
+            json_path = os.path.join(labels_dir, json_filename)
+            if os.path.exists(json_path):
+                try:
+                    with open(json_path, "r") as f_json:
+                        import json
+                        meta = json.load(f_json)
+                        class_names = meta.get("class_names", [])
+                except Exception:
+                    pass
+
+            img_path = os.path.join(images_dir, filename)
+            width, height = 640, 480
+            try:
+                img = cv2.imread(img_path)
+                if img is not None:
+                    height, width = img.shape[:2]
+            except Exception:
+                pass
+
+            try:
+                with open(img_path, "rb") as f:
+                    encoded = base64.b64encode(f.read()).decode('utf-8')
+                    mime = "image/png" if filename.lower().endswith(".png") else "image/jpeg"
+                    b64_url = f"data:{mime};base64,{encoded}"
+            except Exception:
+                b64_url = ""
+
+            items.append({
+                "filename": filename,
+                "num_labels": num_labels,
+                "label_contents": label_contents,
+                "image_url": b64_url,
+                "width": width,
+                "height": height,
+                "class_names": class_names,
+                "model_name": model_name
+            })
+    return items
+
 @app.get("/api/retrain/dataset")
 async def list_retrain_dataset():
     try:
-        if not os.path.exists(IMAGES_DIR):
-            return {"images": []}
-            
         items = []
-        for filename in os.listdir(IMAGES_DIR):
-            if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                name_part, _ = os.path.splitext(filename)
-                
-                label_filename = f"{name_part}.txt"
-                label_path = os.path.join(LABELS_DIR, label_filename)
-                num_labels = 0
-                label_contents = ""
-                
-                if os.path.exists(label_path):
-                    try:
-                        with open(label_path, "r") as f:
-                            lines = f.readlines()
-                            num_labels = len(lines)
-                            label_contents = "".join(lines)
-                    except Exception:
-                        pass
-                
-                img_path = os.path.join(IMAGES_DIR, filename)
-                try:
-                    with open(img_path, "rb") as f:
-                        encoded = base64.b64encode(f.read()).decode('utf-8')
-                        mime = "image/png" if filename.lower().endswith(".png") else "image/jpeg"
-                        b64_url = f"data:{mime};base64,{encoded}"
-                except Exception:
-                    b64_url = ""
-
-                items.append({
-                    "filename": filename,
-                    "num_labels": num_labels,
-                    "label_contents": label_contents,
-                    "image_url": b64_url
-                })
+        # 1. Scan legacy root folders
+        legacy_items = scan_directory(IMAGES_DIR, LABELS_DIR, "legacy")
+        for item in legacy_items:
+            fn = item["filename"].lower()
+            if "vt" in fn or "visual" in fn:
+                item["model_name"] = "visual_6classes"
+            else:
+                item["model_name"] = "radio_4classes"
+            items.append(item)
+            
+        # 2. Scan each model directory
+        models = [
+            "radio_binary", "radio_4classes", "radio_7classes",
+            "visual_binary", "visual_6classes"
+        ]
+        for m in models:
+            m_images_dir = os.path.join(DATASET_DIR, m, "images")
+            m_labels_dir = os.path.join(DATASET_DIR, m, "labels")
+            items.extend(scan_directory(m_images_dir, m_labels_dir, m))
+            
         return {"images": items}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/retrain/dataset/{filename}")
-async def delete_retrain_item(filename: str):
+async def delete_retrain_item_legacy(filename: str):
     try:
         safe_filename = os.path.basename(filename)
-        img_path = os.path.join(IMAGES_DIR, safe_filename)
+        # Attempt to find which folder the file exists in
+        target_img_dir = IMAGES_DIR
+        target_lbl_dir = LABELS_DIR
         
+        # Check model folders first
+        models = [
+            "radio_binary", "radio_4classes", "radio_7classes",
+            "visual_binary", "visual_6classes"
+        ]
+        for m in models:
+            m_images_dir = os.path.join(DATASET_DIR, m, "images")
+            if os.path.exists(os.path.join(m_images_dir, safe_filename)):
+                target_img_dir = m_images_dir
+                target_lbl_dir = os.path.join(DATASET_DIR, m, "labels")
+                break
+                
+        img_path = os.path.join(target_img_dir, safe_filename)
         name_part, _ = os.path.splitext(safe_filename)
-        label_path = os.path.join(LABELS_DIR, f"{name_part}.txt")
+        label_path = os.path.join(target_lbl_dir, f"{name_part}.txt")
+        json_path = os.path.join(target_lbl_dir, f"{name_part}.json")
         
         if os.path.exists(img_path):
             os.remove(img_path)
         if os.path.exists(label_path):
             os.remove(label_path)
+        if os.path.exists(json_path):
+            os.remove(json_path)
             
         return {"status": "success", "message": f"Deleted {safe_filename} from dataset"}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/retrain/dataset/{model_name}/{filename}")
+async def delete_retrain_item(model_name: str, filename: str):
+    try:
+        safe_filename = os.path.basename(filename)
+        if model_name not in ["radio_binary", "radio_4classes", "radio_7classes", "visual_binary", "visual_6classes"]:
+            target_img_dir = IMAGES_DIR
+            target_lbl_dir = LABELS_DIR
+        else:
+            target_img_dir = os.path.join(DATASET_DIR, model_name, "images")
+            target_lbl_dir = os.path.join(DATASET_DIR, model_name, "labels")
+            
+        img_path = os.path.join(target_img_dir, safe_filename)
+        name_part, _ = os.path.splitext(safe_filename)
+        label_path = os.path.join(target_lbl_dir, f"{name_part}.txt")
+        json_path = os.path.join(target_lbl_dir, f"{name_part}.json")
+        
+        if os.path.exists(img_path):
+            os.remove(img_path)
+        if os.path.exists(label_path):
+            os.remove(label_path)
+        if os.path.exists(json_path):
+            os.remove(json_path)
+            
+        return {"status": "success", "message": f"Deleted {safe_filename} from {model_name} dataset"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/retrain/download/{model_name}")
+async def download_model_dataset(model_name: str, background_tasks: BackgroundTasks):
+    import zipfile
+    if model_name not in ["radio_binary", "radio_4classes", "radio_7classes", "visual_binary", "visual_6classes"]:
+        raise HTTPException(status_code=400, detail="Invalid model name")
+        
+    model_dir = os.path.join(DATASET_DIR, model_name)
+    
+    images_dir = os.path.join(model_dir, "images")
+    labels_dir = os.path.join(model_dir, "labels")
+    
+    has_images = os.path.exists(images_dir) and any(f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')) for f in os.listdir(images_dir))
+    if not has_images:
+        raise HTTPException(status_code=404, detail=f"No dataset files found to download for model {model_name}")
+        
+    # Create zip file
+    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    temp_zip_path = temp_zip.name
+    temp_zip.close()
+    
+    def remove_file(path: str):
+        if os.path.exists(path):
+            os.unlink(path)
+            
+    try:
+        with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for root, dirs, files in os.walk(model_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, model_dir)
+                    zip_file.write(file_path, arcname)
+                    
+        background_tasks.add_task(remove_file, temp_zip_path)
+        return FileResponse(
+            temp_zip_path,
+            media_type="application/zip",
+            filename=f"dataset_{model_name}.zip"
+        )
+    except Exception as e:
+        remove_file(temp_zip_path)
         raise HTTPException(status_code=500, detail=str(e))
 
 
