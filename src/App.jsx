@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { jsPDF } from "jspdf";
 import Markdown from 'markdown-to-jsx';
@@ -1236,6 +1236,8 @@ export default function App() {
 
   const [currentInspectionId, setCurrentInspectionId] = useState(null);
   const [currentPendingRecord, setCurrentPendingRecord] = useState(null);
+  const [selectedProjectFolder, setSelectedProjectFolder] = useState(null);
+  const [allGlobalProjectNames, setAllGlobalProjectNames] = useState([]);
   const [currentInspectionDecision, setCurrentInspectionDecision] = useState(null);
   const [reportNotes, setReportNotes] = useState("");
   const [weldForm, setWeldForm] = useState({
@@ -1274,6 +1276,14 @@ export default function App() {
         setInspections(dbInsp);
       }
     } catch (e) { console.error("DB Insp Load Error:", e); }
+
+    try {
+      const resProj = await fetch(`${API_URL}/api/projects/names`);
+      if (resProj.ok) {
+        const dbProj = await resProj.json();
+        setAllGlobalProjectNames(dbProj);
+      }
+    } catch (e) { console.error("DB Proj Names Load Error:", e); }
   };
 
   useEffect(() => {
@@ -1521,6 +1531,9 @@ export default function App() {
         
         setInspections(prev => [finalRecord, ...prev]);
         setCurrentPendingRecord(null); // clear pending
+        if (finalRecord.project_name && !allGlobalProjectNames.includes(finalRecord.project_name)) {
+          setAllGlobalProjectNames(prev => [...prev, finalRecord.project_name].sort());
+        }
       } else {
         // Update existing record (PATCH)
         await fetch(`${API_URL}/api/inspections/${currentInspectionId}`, {
@@ -2264,6 +2277,25 @@ function AppContent({
       .map(insp => insp.project_name)
       .filter(name => typeof name === 'string' && name.trim().length > 0)
   ));
+  const projectFolders = useMemo(() => {
+    const folders = {};
+    (inspections || []).forEach(insp => {
+      const proj = (insp.project_name || 'Unnamed Project').trim();
+      if (!folders[proj]) {
+        folders[proj] = {
+          name: proj,
+          inspections: [],
+          lastUpdated: insp.timestamp,
+        };
+      }
+      folders[proj].inspections.push(insp);
+    });
+    return Object.values(folders);
+  }, [inspections]);
+  const displayedProjectNames = useMemo(() => {
+    const combined = new Set([...allGlobalProjectNames, ...uniqueProjectNames]);
+    return Array.from(combined).filter(name => typeof name === 'string' && name.trim().length > 0).sort();
+  }, [allGlobalProjectNames, uniqueProjectNames]);
   const isVisualInspection = analysisModel === 'Visual (Photo)' || 
     (analysisModel === 'Auto-Detect' && (
       currentModelUsed.toLowerCase().includes('visual') || 
@@ -2350,6 +2382,9 @@ function AppContent({
 
   const setActiveTab = (tab) => {
     const path = tab === 'Dashboard' ? '/' : `/${tab.toLowerCase().replace(/ /g, '-')}`;
+    if (tab === 'History') {
+      setSelectedProjectFolder(null);
+    }
     navigate(path);
   };
 
@@ -2886,8 +2921,8 @@ function AppContent({
                           onChange={(e) => setWeldForm(f => ({ ...f, project_name: e.target.value }))}
                           className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-red-500 transition-colors"
                         />
-                        <datalist id="project-names-list">
-                          {uniqueProjectNames.map((name, index) => (
+                         <datalist id="project-names-list">
+                          {displayedProjectNames.map((name, index) => (
                             <option key={index} value={name} />
                           ))}
                         </datalist>
@@ -3585,64 +3620,112 @@ function AppContent({
                   </div>
                 </div>
               </div>
-            ) : inspections.length === 0 ? (
-              <div className="text-center text-slate-500 py-20 flex flex-col items-center">
-                <svg className="w-12 h-12 mb-3 text-slate-600/50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012 2v2M7 7h10"></path></svg>
-                <span>No inspections recorded in the database yet.</span>
-              </div>
-            ) : (
+            ) : !selectedProjectFolder ? (
+              /* Project Folders View */
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {inspections.map((insp, i) => {
-                  const defectCount = (insp.detections || []).filter(d => d.type === 'box').length;
-                  return (
-                  <div key={i} className="glass-card p-4 group hover:border-red-500/50 transition-all cursor-pointer relative overflow-hidden" onClick={() => {
-                    navigate('/history/' + insp.id);
-                  }}>
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none"></div>
-                    <div className="aspect-video w-full rounded-lg overflow-hidden bg-black/80 mb-4 border border-white/5 relative z-0">
-                      {(insp.image || insp.image_preview) ? (
-                        <img src={insp.image || insp.image_preview} alt="Scan" className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500" />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-slate-700">No Image</div>
-                      )}
-                      {/* Left Badge: Decision Status */}
-                      <div className="absolute top-2 left-2 bg-black/80 backdrop-blur-md px-2 py-1 rounded border border-white/10 flex items-center gap-1.5 z-20">
-                        <span className={`w-1.5 h-1.5 rounded-full ${insp.decision === 'Accepted' ? 'bg-emerald-500' : insp.decision === 'Refused' ? 'bg-red-500' : 'bg-slate-400 animate-pulse'}`}></span>
-                        <span className="text-[8px] font-bold text-white uppercase tracking-wider">
-                          {insp.decision || 'PENDING'}
-                        </span>
+                {projectFolders.map((folder, idx) => (
+                  <div 
+                    key={idx} 
+                    onClick={() => setSelectedProjectFolder(folder.name)}
+                    className="glass-card p-5 group hover:border-red-500/50 hover:bg-white/5 transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between h-40"
+                  >
+                    <div className="flex items-start justify-between">
+                      {/* Large Folder Icon */}
+                      <div className="w-12 h-12 rounded-xl bg-red-500/10 flex items-center justify-center border border-red-500/20 group-hover:scale-110 transition-transform duration-300">
+                        <svg className="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                        </svg>
                       </div>
-                      {/* Right Badge: Defect Count */}
-                      <div className="absolute top-2 right-2 bg-black/80 backdrop-blur-md px-2 py-1 rounded border border-white/10 flex items-center gap-1.5 z-20">
-                        <span className={`w-1.5 h-1.5 rounded-full ${defectCount > 0 ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`}></span>
-                        <span className="text-[9px] font-bold text-white uppercase tracking-wider">{defectCount > 0 ? `${defectCount} Defects` : 'All Clear'}</span>
-                      </div>
+                      {/* File Count Badge */}
+                      <span className="text-[10px] font-mono text-slate-400 bg-white/5 px-2.5 py-1 rounded-lg border border-white/5 font-bold">
+                        {folder.inspections.length} {folder.inspections.length === 1 ? 'Scan' : 'Scans'}
+                      </span>
                     </div>
-                    <div className="relative z-20 flex justify-between items-end">
-                      <div className="min-w-0 flex-1 pr-2">
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <div className="w-5 h-5 rounded bg-slate-800 flex items-center justify-center overflow-hidden border border-white/10">
-                            <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${insp.username || 'Guest'}&backgroundColor=transparent`} className="w-full h-full object-cover" alt="user" />
-                          </div>
-                          <span className="text-[10px] text-slate-300 font-bold uppercase tracking-wider truncate">{insp.username || 'Unknown'}</span>
-                        </div>
-                        <div className="text-[9px] text-slate-500 font-mono uppercase tracking-wider mb-1">ID #{Math.floor(insp.id || Date.parse(insp.timestamp || new Date().toISOString()) || 0).toString().slice(-6)}</div>
-                        <div className="text-sm font-bold text-slate-100 group-hover:text-red-400 transition-colors truncate capitalize">
-                          {insp.project_name || 'Unnamed Project'}
-                        </div>
-                      </div>
-                      <div className="flex flex-col gap-1 items-end flex-shrink-0">
-                        <div className="text-[10px] text-slate-400 font-medium">
-                          {String(insp.timestamp || '').split(',')[0]}
-                        </div>
-                        <div className="text-[9px] font-mono text-slate-500 bg-white/5 px-1.5 py-0.5 rounded">
-                          {String(insp.timestamp || '').split(',')[1]?.trim() || insp.timestamp}
-                        </div>
-                      </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-white group-hover:text-red-400 transition-colors truncate capitalize mb-1">
+                        {folder.name}
+                      </h3>
+                      <p className="text-[10px] text-slate-500">
+                        Last scan: {folder.lastUpdated ? folder.lastUpdated.split(',')[0] : 'N/A'}
+                      </p>
                     </div>
                   </div>
-                  );
-                })}
+                ))}
+              </div>
+            ) : (
+              /* Detections Inside Selected Project Folder */
+              <div className="space-y-6">
+                <div className="flex items-center gap-3">
+                  <button 
+                    onClick={() => setSelectedProjectFolder(null)}
+                    className="flex items-center gap-2 text-xs font-bold text-slate-400 hover:text-white transition-colors uppercase tracking-wider"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
+                    </svg>
+                    Projects Folder
+                  </button>
+                  <span className="text-slate-700">/</span>
+                  <span className="text-xs font-bold text-red-400 capitalize bg-red-500/10 border border-red-500/20 px-2 py-0.5 rounded">
+                    {selectedProjectFolder}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  {inspections
+                    .filter(insp => (insp.project_name || 'Unnamed Project').trim().toLowerCase() === selectedProjectFolder.trim().toLowerCase())
+                    .map((insp, i) => {
+                      const defectCount = (insp.detections || []).filter(d => d.type === 'box').length;
+                      return (
+                      <div key={i} className="glass-card p-4 group hover:border-red-500/50 transition-all cursor-pointer relative overflow-hidden" onClick={() => {
+                        navigate('/history/' + insp.id);
+                      }}>
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none"></div>
+                        <div className="aspect-video w-full rounded-lg overflow-hidden bg-black/80 mb-4 border border-white/5 relative z-0">
+                          {(insp.image || insp.image_preview) ? (
+                            <img src={insp.image || insp.image_preview} alt="Scan" className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-slate-700">No Image</div>
+                          )}
+                          {/* Left Badge: Decision Status */}
+                          <div className="absolute top-2 left-2 bg-black/80 backdrop-blur-md px-2 py-1 rounded border border-white/10 flex items-center gap-1.5 z-20">
+                            <span className={`w-1.5 h-1.5 rounded-full ${insp.decision === 'Accepted' ? 'bg-emerald-500' : insp.decision === 'Refused' ? 'bg-red-500' : 'bg-slate-400 animate-pulse'}`}></span>
+                            <span className="text-[8px] font-bold text-white uppercase tracking-wider">
+                              {insp.decision || 'PENDING'}
+                            </span>
+                          </div>
+                          {/* Right Badge: Defect Count */}
+                          <div className="absolute top-2 right-2 bg-black/80 backdrop-blur-md px-2 py-1 rounded border border-white/10 flex items-center gap-1.5 z-20">
+                            <span className={`w-1.5 h-1.5 rounded-full ${defectCount > 0 ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`}></span>
+                            <span className="text-[9px] font-bold text-white uppercase tracking-wider">{defectCount > 0 ? `${defectCount} Defects` : 'All Clear'}</span>
+                          </div>
+                        </div>
+                        <div className="relative z-20 flex justify-between items-end">
+                          <div className="min-w-0 flex-1 pr-2">
+                            <div className="flex items-center gap-2 mb-1.5">
+                              <div className="w-5 h-5 rounded bg-slate-800 flex items-center justify-center overflow-hidden border border-white/10">
+                                <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${insp.username || 'Guest'}&backgroundColor=transparent`} className="w-full h-full object-cover" alt="user" />
+                              </div>
+                              <span className="text-[10px] text-slate-300 font-bold uppercase tracking-wider truncate">{insp.username || 'Unknown'}</span>
+                            </div>
+                            <div className="text-[9px] text-slate-500 font-mono uppercase tracking-wider mb-1">ID #{Math.floor(insp.id || Date.parse(insp.timestamp || new Date().toISOString()) || 0).toString().slice(-6)}</div>
+                            <div className="text-sm font-bold text-slate-100 group-hover:text-red-400 transition-colors truncate capitalize">
+                              {insp.project_name || 'Unnamed Project'}
+                            </div>
+                          </div>
+                          <div className="flex flex-col gap-1 items-end flex-shrink-0">
+                            <div className="text-[10px] text-slate-400 font-medium">
+                              {String(insp.timestamp || '').split(',')[0]}
+                            </div>
+                            <div className="text-[9px] font-mono text-slate-500 bg-white/5 px-1.5 py-0.5 rounded">
+                              {String(insp.timestamp || '').split(',')[1]?.trim() || insp.timestamp}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      );
+                    })}
+                </div>
               </div>
             )}
           </motion.div>

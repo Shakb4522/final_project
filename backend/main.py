@@ -720,6 +720,17 @@ async def get_inspections(request: Request):
     return inspections
 
 
+@app.get("/api/projects/names")
+async def get_project_names():
+    cursor = db.inspections.aggregate([
+        {"$group": {"_id": "$project_name"}},
+        {"$match": {"_id": {"$ne": None, "$ne": ""}}}
+    ])
+    results = await cursor.to_list(1000)
+    project_names = [doc["_id"] for doc in results if doc.get("_id")]
+    return sorted(list(set(project_names)))
+
+
 @app.post("/api/inspections")
 async def save_inspection(inspection: InspectionRecord, request: Request):
     await log_model_usage(request, "4cls")
