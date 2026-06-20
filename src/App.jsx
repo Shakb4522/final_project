@@ -2030,7 +2030,9 @@ export default function App() {
           chatInput, setChatInput, typingChatId, setTypingChatId, stopTypingRef, chatEndRef, chatContainerRef, isAtBottomRef, currentChat, handleChatScroll, startNewChat, deleteChat, handleDecision,
           isRegisterMode, setIsRegisterMode, handleRegister,
           isLoggingIn, setIsLoggingIn,
-          weldForm, setWeldForm
+          weldForm, setWeldForm,
+          selectedProjectFolder, setSelectedProjectFolder,
+          allGlobalProjectNames, setAllGlobalProjectNames
         }}
       />
     </BrowserRouter>
@@ -2051,7 +2053,9 @@ function AppContent({
   chatInput, setChatInput, typingChatId, setTypingChatId, stopTypingRef, chatEndRef, chatContainerRef, isAtBottomRef, currentChat, handleChatScroll, startNewChat, deleteChat, handleDecision,
   isRegisterMode, setIsRegisterMode, handleRegister,
   isLoggingIn, setIsLoggingIn,
-  weldForm, setWeldForm
+  weldForm, setWeldForm,
+  selectedProjectFolder, setSelectedProjectFolder,
+  allGlobalProjectNames, setAllGlobalProjectNames
 }) {
   const navigate = useNavigate();
   const location = useLocation();
